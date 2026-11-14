@@ -17,6 +17,7 @@ import { getVehicleOrDefault } from '@/data/vehicles';
 import { FixedStepClock, MAX_WALL_DT } from './FixedStepClock';
 import { Simulation, isValidVehicleState } from './Simulation';
 import { SimulationHost } from './SimulationHost';
+import { buildSnapshot } from './snapshot';
 import { PHYSICS_DT, type SimEvent, type SimSnapshot, type SimulationConfig } from './types';
 
 const site = getLaunchSiteOrDefault('cape-canaveral');
@@ -171,16 +172,8 @@ describe('Simulation：发射台待命状态', () => {
 describe('遥测推导', () => {
   it('发射台上的读数', () => {
     const sim = new Simulation(config);
-    const snapshot: SimSnapshot = {
-      seq: 0,
-      simTime: sim.time,
-      timeWarp: 1,
-      paused: false,
-      simRate: 1,
-      earthRotationAngle: sim.earthRotationAngle,
-      vehicle: sim.getVehicleState(),
-    };
-    const t = deriveTelemetry(snapshot);
+    const snapshot: SimSnapshot = buildSnapshot(sim, { seq: 0, timeWarp: 1, paused: false, simRate: 1 });
+    const t = deriveTelemetry(snapshot, config);
     expect(t.altitude).toBeCloseTo(snapshot.vehicle.centerOfMassHeight, 6);
     expect(t.surfaceSpeed).toBeLessThan(1e-9);
     expect(t.verticalSpeed).toBeCloseTo(0, 9);
@@ -193,7 +186,12 @@ describe('遥测推导', () => {
     expect(t.pitch).toBeCloseTo(Math.PI / 2, 9);
     expect(t.heading).toBeNull();
     expect(t.stagePropellant).toEqual([400_000, 95_000]);
-    expect(t.enginesOn).toBe(false);
+    expect(t.ignited).toBe(false);
+    expect(t.thrust).toBe(0);
+    expect(t.missionTime).toBeNull();
+    expect(t.downrange).toBeLessThan(1e-6);
+    expect(t.remainingDeltaV).toBeCloseTo(12_175, -1);
+    expect(t.stageAttached).toEqual([true, true]);
   });
 });
 

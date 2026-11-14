@@ -22,19 +22,37 @@ interface DebugState {
     execution: string | null;
     paused: boolean;
     timeWarp: number;
+    maxTimeWarp: number;
     simRate: number;
     telemetry: null | {
       simTime: number;
+      missionTime: number | null;
+      phase: string;
       altitude: number;
       inertialSpeed: number;
       surfaceSpeed: number;
+      verticalSpeed: number;
       gLoad: number;
       latitude: number;
       longitude: number;
       mass: number;
       pitch: number;
+      heading: number | null;
+      throttle: number;
+      thrust: number;
+      ignited: boolean;
+      dynamicPressure: number;
+      mach: number;
+      remainingDeltaV: number;
+      activeStageIndex: number;
+      fairingAttached: boolean;
+      stagePropellant: number[];
+      stageAttached: boolean[];
     };
+    events: string[];
+    outcome: null | { kind: string; impactSpeed: number };
   };
+  debrisCount: number;
   fps: number;
 }
 
@@ -42,8 +60,8 @@ const readState = (page: Page): Promise<DebugState | null> =>
   page.evaluate(() => {
     const api = (window as unknown as { __orbitalFrontier?: Record<string, () => unknown> }).__orbitalFrontier;
     if (!api) return null;
-    const frame = api.frame!() as DebugState['frame'];
-    const sim = api.sim!() as DebugState['sim'];
+    const frame = api.frame!() as DebugState['frame'] & { debris: unknown[] };
+    const sim = api.sim!() as Omit<DebugState['sim'], 'events'> & { events: { kind: string }[] };
     const perf = api.perf!() as { fps: number };
     return {
       frame: {
@@ -61,9 +79,13 @@ const readState = (page: Page): Promise<DebugState | null> =>
         execution: sim.execution,
         paused: sim.paused,
         timeWarp: sim.timeWarp,
+        maxTimeWarp: sim.maxTimeWarp,
         simRate: sim.simRate,
         telemetry: sim.telemetry,
+        events: sim.events.map((e) => e.kind),
+        outcome: sim.outcome ? { kind: sim.outcome.kind, impactSpeed: sim.outcome.impactSpeed } : null,
       },
+      debrisCount: frame.debris.length,
       fps: perf.fps,
     };
   });
@@ -166,8 +188,14 @@ test.describe('Orbital Frontier 冒烟测试', () => {
     await expect(page.getByTestId('readout-longitude')).toContainText('80.60° W');
     await expect(page.getByTestId('readout-twr')).toContainText('1.40');
 
-    // 尚未实现的飞行控制必须是禁用状态
-    await expect(page.getByTestId('ignite-button')).toBeDisabled();
+    // 发射台上：点火按钮可用，导航球与节流阀已显示
+    await expect(page.getByTestId('stage-button')).toBeEnabled();
+    await expect(page.getByTestId('stage-button')).toContainText('点火起飞');
+    await expect(page.getByTestId('navball')).toBeVisible();
+    await expect(page.getByTestId('throttle-value')).toHaveText('100%');
+    await expect(page.getByTestId('flight-hint')).toContainText('空格');
+    // 尚未实现的仪表仍然标注阶段而不是显示数值
+    await expect(page.getByTestId('telemetry-panel')).toContainText('阶段三');
   });
 
   test('暂停与恢复', async ({ page }) => {
@@ -248,7 +276,8 @@ test.describe('Orbital Frontier 冒烟测试', () => {
   test('常见输入不会产生无效数值：拖拽、极限缩放、连续按键', async ({ page }) => {
     const problems = await startApp(page);
     await enterFlight(page);
-    const canvas = page.locator('canvas');
+    // 主画布（页面上还有导航球的小画布）
+    const canvas = page.locator('canvas').first();
     const box = (await canvas.boundingBox())!;
     const cx = box.x + box.width / 2;
     const cy = box.y + box.height / 2;
@@ -271,7 +300,8 @@ test.describe('Orbital Frontier 冒烟测试', () => {
       expect(state.frame.cameraAltitude).toBeGreaterThan(0.5);
     }
 
-    for (const key of ['.', '.', '.', '.', '.', '.', '.', ',', 'p', 'p', 'c', 'c', 'c', '1', '2', '3', '4', 'x', 'Escape', ' ']) {
+    // 连续按键（其中空格会点火起飞，W/A/Q 等会转动火箭——状态都应保持有效）
+    for (const key of ['.', '.', '.', '.', '.', '.', '.', ',', 'p', 'p', 'c', 'c', 'c', '1', '2', '3', '4', ' ', 'w', 'a', 'q', 'z', 'x', 'f', 'ArrowUp', 'ArrowDown', 'Escape', ' ']) {
       await page.keyboard.press(key);
     }
     await page.waitForTimeout(800);
@@ -322,5 +352,140 @@ test.describe('Orbital Frontier 冒烟测试', () => {
     await expect(page.getByTestId('site-jiuquan')).toHaveAttribute('aria-pressed', 'true');
     const state = await expectAllFinite(page);
     expect(state.sim.telemetry!.mass).toBe(14_900);
+  });
+
+  test('点火起飞：火箭离开发射台，仪表与事件记录反映真实的飞行状态', async ({ page }) => {
+    const problems = await startApp(page);
+    await enterFlight(page);
+    const before = (await readState(page))!.sim.telemetry!;
+    expect(before.phase).toBe('prelaunch');
+    expect(before.missionTime).toBeNull();
+
+    await page.keyboard.press('Space');
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.phase).toBe('flight');
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.altitude, { timeout: 60_000 }).toBeGreaterThan(before.altitude + 50);
+
+    const state = await expectAllFinite(page);
+    const t = state.sim.telemetry!;
+    expect(t.missionTime).toBeGreaterThan(0);
+    expect(t.thrust).toBeGreaterThan(7.0e6);
+    expect(t.thrust).toBeLessThan(8.2e6);
+    expect(t.verticalSpeed).toBeGreaterThan(5);
+    expect(t.gLoad).toBeGreaterThan(1.3);
+    expect(t.gLoad).toBeLessThan(2.0);
+    expect(t.stagePropellant[0]!).toBeLessThan(400_000);
+    expect(t.mass).toBeLessThan(532_200);
+    expect(state.sim.events.slice(0, 2)).toEqual(['ignition', 'liftoff']);
+    // 发动机工作时时间倍率受限
+    expect(state.sim.maxTimeWarp).toBe(5);
+    await expect(page.getByTestId('warp-100')).toBeDisabled();
+    await expect(page.getByTestId('warp-5')).toBeEnabled();
+
+    await expect(page.getByTestId('flight-phase')).toContainText('动力飞行');
+    await expect(page.getByTestId('mission-clock')).toContainText('T+');
+    await expect(page.getByTestId('readout-engine')).toContainText('工作');
+    await expect(page.getByTestId('event-log')).toContainText('起飞');
+    await expect(page.getByTestId('stage-button')).toContainText('分离一级');
+    const hudText = await page.getByTestId('flight-hud').innerText();
+    expect(hudText).not.toMatch(/NaN|Infinity|undefined/);
+    expect(problems).toEqual([]);
+  });
+
+  test('姿态与节流控制：按住 D 向东倾斜；节流阀按钮与方向键生效', async ({ page }) => {
+    await startApp(page);
+    await enterFlight(page);
+    await page.keyboard.press('Space');
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.missionTime ?? 0, { timeout: 60_000 }).toBeGreaterThan(4);
+
+    await page.keyboard.down('KeyD');
+    await expect.poll(async () => ((await readState(page))!.sim.telemetry!.pitch * 180) / Math.PI, { timeout: 60_000 }).toBeLessThan(80);
+    await page.keyboard.up('KeyD');
+    const tilted = (await readState(page))!.sim.telemetry!;
+    expect(tilted.heading).not.toBeNull();
+    expect((tilted.heading! * 180) / Math.PI).toBeGreaterThan(85);
+    expect((tilted.heading! * 180) / Math.PI).toBeLessThan(95);
+    // 松开后姿态保持：一秒后俯仰角变化很小
+    await page.waitForTimeout(1500);
+    const held = (await readState(page))!.sim.telemetry!;
+    expect(Math.abs(held.pitch - tilted.pitch) * (180 / Math.PI)).toBeLessThan(6);
+
+    // 节流：按钮关机 → 推力为 0；Z 恢复满推力；方向键下调
+    await page.getByTestId('throttle-cut').click();
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.throttle).toBe(0);
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.thrust).toBe(0);
+    await expect(page.getByTestId('flight-phase')).toContainText('无动力滑行');
+    await page.keyboard.press('KeyZ');
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.throttle).toBe(1);
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.thrust).toBeGreaterThan(1e6);
+    await page.keyboard.down('ArrowDown');
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.throttle).toBeLessThan(0.8);
+    await page.keyboard.up('ArrowDown');
+    await expectAllFinite(page);
+  });
+
+  test('关机后火箭继续按引力与阻力运动并最终坠毁；显示飞行结果，可重新发射', async ({ page }) => {
+    await startApp(page);
+    await page.getByTestId('vehicle-meteor-s').click();
+    await enterFlight(page);
+    await expect.poll(async () => (await readState(page))!.sim.telemetry?.mass).toBe(14_900);
+    await page.keyboard.press('Space');
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.altitude, { timeout: 60_000 }).toBeGreaterThan(40);
+    await page.keyboard.press('KeyX');
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.thrust).toBe(0);
+    const coasting = (await readState(page))!.sim.telemetry!;
+    // 关机瞬间仍在上升：惯性
+    expect(coasting.phase).toBe('flight');
+
+    await expect.poll(async () => (await readState(page))!.sim.outcome?.kind ?? null, { timeout: 90_000 }).toBe('destroyed');
+    const state = await expectAllFinite(page);
+    expect(state.sim.outcome!.impactSpeed).toBeGreaterThan(10);
+    expect(state.sim.telemetry!.phase).toBe('destroyed');
+    await expect(page.getByTestId('flight-summary')).toBeVisible();
+    await expect(page.getByTestId('flight-outcome')).toHaveText('飞行器损毁');
+    await expect(page.getByTestId('flight-summary')).toContainText('最大高度');
+    await expect(page.getByTestId('flight-summary')).toContainText('垂直速度');
+
+    // 重新发射：回到发射台初始状态
+    await page.getByTestId('summary-restart').click();
+    await expect.poll(async () => (await readState(page))!.sim.telemetry?.phase ?? null).toBe('prelaunch');
+    await expect(page.getByTestId('flight-summary')).toHaveCount(0);
+    const reset = await expectAllFinite(page);
+    expect(reset.sim.telemetry!.stagePropellant[0]).toBe(10_500);
+    expect(reset.sim.events).toEqual([]);
+  });
+
+  test('分级：分离后质量下降、下一级点火，被抛掉的箭体作为分离体继续被跟踪', async ({ page }) => {
+    await startApp(page);
+    await enterFlight(page);
+    await page.keyboard.press('Space');
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.missionTime ?? 0, { timeout: 60_000 }).toBeGreaterThan(5);
+    await page.getByTestId('stage-button').click();
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.activeStageIndex).toBe(1);
+    await expect.poll(async () => (await readState(page))!.debrisCount, { timeout: 30_000 }).toBe(1);
+    const state = await expectAllFinite(page);
+    const t = state.sim.telemetry!;
+    expect(t.stageAttached).toEqual([false, true]);
+    expect(t.mass).toBeLessThan(110_000);
+    expect(state.sim.events).toContain('separation');
+    await expect(page.getByTestId('stage-0')).toContainText('已分离');
+    await expect(page.getByTestId('stage-button')).toContainText('分离二级');
+    await expect(page.getByTestId('event-log')).toContainText('一级分离');
+  });
+
+  test('整流罩：飞行中按 F 抛罩，产生两个半罩分离体', async ({ page }) => {
+    await startApp(page);
+    await page.getByTestId('vehicle-zenith-3').click();
+    await enterFlight(page);
+    await expect.poll(async () => (await readState(page))!.sim.telemetry?.mass).toBe(607_200);
+    await expect(page.getByTestId('fairing-button')).toBeDisabled();
+    await page.keyboard.press('Space');
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.missionTime ?? 0, { timeout: 60_000 }).toBeGreaterThan(4);
+    await expect(page.getByTestId('fairing-button')).toBeEnabled();
+    await page.keyboard.press('KeyF');
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.fairingAttached).toBe(false);
+    await expect.poll(async () => (await readState(page))!.debrisCount, { timeout: 30_000 }).toBe(2);
+    await expect(page.getByTestId('payload-row')).toContainText('整流罩已抛');
+    await expect(page.getByTestId('fairing-button')).toBeDisabled();
+    await expectAllFinite(page);
   });
 });

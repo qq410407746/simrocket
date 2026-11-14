@@ -9,7 +9,9 @@ import {
   formatLatitude,
   formatLongitude,
   formatMass,
+  formatMissionTime,
   formatNumber,
+  formatPressure,
   formatSpeed,
   formatUtc,
 } from './format';
@@ -51,6 +53,14 @@ describe('显示格式化', () => {
 
   it('UTC 时间', () => {
     expect(formatUtc(julianDateFromUnixMs(Date.UTC(2026, 3, 12, 14, 52, 24)))).toBe('2026-04-12 14:52:24 UTC');
+  });
+
+  it('压力与任务时间', () => {
+    expect(formatPressure(38_912)).toEqual({ value: '38.91', unit: 'kPa' });
+    expect(formatPressure(12.34)).toEqual({ value: '12.3', unit: 'Pa' });
+    expect(formatPressure(NaN).value).toBe('—');
+    expect(formatMissionTime(null)).toBe('T− 00:00:00');
+    expect(formatMissionTime(152.6)).toBe('T+ 00:02:32');
   });
 
   it('无效数值显示为占位符而不是 NaN', () => {

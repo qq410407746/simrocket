@@ -10,7 +10,7 @@ import { PerfProbe } from './core/PerfProbe';
 import { Planet } from './earth/Planet';
 import { LaunchSite } from './launchpad/LaunchSite';
 import { VehicleMarker } from './rockets/VehicleMarker';
-import { VehicleView } from './rockets/VehicleView';
+import { VehicleAssembly } from './rockets/VehicleAssembly';
 import { SceneLighting } from './sky/SceneLighting';
 import { Starfield } from './sky/Starfield';
 
@@ -47,7 +47,7 @@ export function SceneRoot() {
         <Planet />
         <SceneLighting shadows={shadows} shadowExtent={Math.max(70, vehicleHeight(vehicle) * 1.4)} />
         <LaunchSite site={site} vehicle={vehicle} shadows={shadows} />
-        <VehicleView vehicle={vehicle} />
+        <VehicleAssembly vehicle={vehicle} />
         <VehicleMarker />
       </Suspense>
       <PerfProbe />

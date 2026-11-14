@@ -21,7 +21,11 @@ export function HudButton({ children, onClick, active, disabled, title, classNam
   return (
     <button
       type="button"
-      onClick={onClick}
+      onClick={(e) => {
+        // 点击后不保留键盘焦点，避免随后按空格（分级键）时再次触发这个按钮。
+        e.currentTarget.blur();
+        onClick?.();
+      }}
       disabled={disabled}
       title={title}
       aria-label={ariaLabel}

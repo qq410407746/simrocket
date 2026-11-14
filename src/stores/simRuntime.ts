@@ -8,14 +8,15 @@
  */
 import type { LaunchSite } from '@/data/launchSites';
 import { launchSiteGeodetic } from '@/data/launchSites';
-import { julianDateForLocalSolarTime } from '@/game/physics/ephemeris/time';
+import type { AttitudeInput } from '@/game/physics/attitude/attitude';
 import { DEG2RAD } from '@/game/physics/constants';
+import { julianDateForLocalSolarTime } from '@/game/physics/ephemeris/time';
 import { RenderClock, SnapshotBuffer } from '@/game/simulation/interpolation';
-import type { SimEvent, SimulationConfig, TimeWarp } from '@/game/simulation/types';
+import type { SimEvent, SimSnapshot, SimulationConfig, TimeWarp } from '@/game/simulation/types';
 import { deriveTelemetry } from '@/game/telemetry/telemetry';
 import type { VehicleDefinition } from '@/game/vehicles/types';
 import { SimulationClient } from '@/workers/SimulationClient';
-import { useSimStore } from './simStore';
+import { EVENT_LOG_LIMIT, INITIAL_SIM_STATE, useSimStore } from './simStore';
 
 /** UI 遥测刷新间隔 [ms]。 */
 const TELEMETRY_INTERVAL_MS = 100;
@@ -36,6 +37,11 @@ export const createSimulationConfig = (vehicle: VehicleDefinition, site: LaunchS
   ),
 });
 
+/** 界面需要立即（而不是等到下一个 100 ms 周期）反映的离散状态。 */
+const discreteStateKey = (s: SimSnapshot): string =>
+  `${s.paused}|${s.timeWarp}|${s.maxTimeWarp}|${s.vehicle.phase}|${s.vehicle.ignited}|${s.vehicle.activeStageIndex}|` +
+  `${s.vehicle.fairingAttached}|${s.vehicle.throttle.toFixed(3)}|${s.liftoffTime !== null}|${s.outcome !== null}`;
+
 class SimRuntime {
   /** 渲染层每帧读取的快照缓冲（非响应式）。 */
   readonly snapshots = new SnapshotBuffer();
@@ -47,6 +53,7 @@ class SimRuntime {
 
   private client: SimulationClient | null = null;
   private lastTelemetryMs = -Infinity;
+  private lastDiscreteKey = '';
 
   /** 以给定配置（重新）开始模拟。 */
   start(config: SimulationConfig): void {
@@ -55,17 +62,19 @@ class SimRuntime {
     this.snapshots.clear();
     this.renderClock.reset();
     this.lastTelemetryMs = -Infinity;
+    this.lastDiscreteKey = '';
     useSimStore.setState({
+      ...INITIAL_SIM_STATE,
       status: 'starting',
-      errorMessage: null,
       execution: this.client.execution,
-      telemetry: null,
-      paused: false,
-      timeWarp: 1,
-      simRate: 0,
       epochJulianDate: config.epochJulianDate,
     });
     this.client.send({ type: 'init', config });
+  }
+
+  /** 以当前配置重新开始（回到发射台）。 */
+  restart(): void {
+    if (this.config) this.start(this.config);
   }
 
   setPaused(paused: boolean): void {
@@ -76,35 +85,65 @@ class SimRuntime {
     this.client?.send({ type: 'setTimeWarp', warp });
   }
 
+  /** 节流指令 [0, 1]。 */
+  setThrottle(throttle: number): void {
+    this.client?.send({ type: 'setThrottle', throttle });
+  }
+
+  setAttitudeInput(input: AttitudeInput): void {
+    this.client?.send({ type: 'setAttitudeInput', input });
+  }
+
+  /** 飞行序列的下一步：点火 / 分级 / 载荷发动机点火。 */
+  stage(): void {
+    this.client?.send({ type: 'stage' });
+  }
+
+  jettisonFairing(): void {
+    this.client?.send({ type: 'jettisonFairing' });
+  }
+
   stop(): void {
     this.client?.dispose();
     this.client = null;
     this.config = null;
     this.snapshots.clear();
-    useSimStore.setState({ status: 'idle', telemetry: null, execution: null });
+    useSimStore.setState({ ...INITIAL_SIM_STATE });
   }
 
   private readonly handleEvent = (event: SimEvent): void => {
+    const config = this.config;
     switch (event.type) {
       case 'ready':
         this.earthAngleAtEpoch = event.earthAngleAtEpoch;
         break;
       case 'snapshot': {
+        if (!config) break;
         const now = performance.now();
         const { snapshot } = event;
         this.snapshots.push(snapshot, now);
+        const key = discreteStateKey(snapshot);
         const store = useSimStore.getState();
-        const controlChanged = store.paused !== snapshot.paused || store.timeWarp !== snapshot.timeWarp;
-        if (controlChanged || store.status !== 'running' || now - this.lastTelemetryMs >= TELEMETRY_INTERVAL_MS) {
+        if (key !== this.lastDiscreteKey || store.status !== 'running' || now - this.lastTelemetryMs >= TELEMETRY_INTERVAL_MS) {
           this.lastTelemetryMs = now;
+          this.lastDiscreteKey = key;
           useSimStore.setState({
             status: 'running',
-            telemetry: deriveTelemetry(snapshot),
+            telemetry: deriveTelemetry(snapshot, config),
             paused: snapshot.paused,
             timeWarp: snapshot.timeWarp,
+            maxTimeWarp: snapshot.maxTimeWarp,
             simRate: snapshot.simRate,
+            liftoffTime: snapshot.liftoffTime,
+            stats: snapshot.stats,
+            outcome: snapshot.outcome,
           });
         }
+        break;
+      }
+      case 'flightEvents': {
+        const events = [...useSimStore.getState().events, ...event.events];
+        useSimStore.setState({ events: events.slice(-EVENT_LOG_LIMIT) });
         break;
       }
       case 'error':

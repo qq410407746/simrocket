@@ -31,6 +31,8 @@ const ZOOM_SPEED = 0.0012; // 每滚轮单位的对数缩放量
 const MENU_SPIN_RATE = 0.012; // rad / s
 /** 主菜单中地球在画面上的水平位置（NDC）；左侧留给菜单面板。 */
 const MENU_FRAMING_OFFSET = 0.42;
+/** 近景飞行视角下画面主点的竖直位置（NDC）：把火箭显示在画面中上部，下方留给导航球。 */
+const FLIGHT_PRINCIPAL_OFFSET_Y = 0.3;
 
 const baseMode = (mode: RigMode): CameraModeId => (mode === 'menu' ? 'orbit' : mode);
 
@@ -76,6 +78,7 @@ export function CameraRig() {
   const transition = useRef<Transition | null>(null);
   const lastPose = useRef<CameraPose | null>(null);
   const dragging = useRef(false);
+  const principalOffset = useRef(0);
   const scratch = useRef({ eye: new Vector3(), target: new Vector3(), up: new Vector3(), m: new Matrix4() });
 
   // 指针与滚轮输入：直接修改当前机位的参数（不经过 React 状态，避免每次移动都重渲染）。
@@ -221,12 +224,22 @@ export function CameraRig() {
       camera.aspect = aspect;
       camera.updateProjectionMatrix();
     }
+    // 主点偏移：近景视角上移，轨道/菜单视角居中；切换时平滑过渡。
+    // 透视投影矩阵的 [1][2] 元素为 (top + bottom)/(top − bottom)，设为 −s 即把正前方投影到 NDC y = s。
+    const wantedOffset = mode.current === 'menu' || mode.current === 'orbit' ? 0 : FLIGHT_PRINCIPAL_OFFSET_Y;
+    principalOffset.current += (wantedOffset - principalOffset.current) * Math.min(1, delta * 3);
+    if (Math.abs(wantedOffset - principalOffset.current) < 1e-4) principalOffset.current = wantedOffset;
+    if (camera.projectionMatrix.elements[9] !== -principalOffset.current) {
+      camera.projectionMatrix.elements[9] = -principalOffset.current;
+      camera.projectionMatrixInverse.copy(camera.projectionMatrix).invert();
+    }
     camera.updateMatrixWorld();
 
     frameState.cameraPosition = pose.position;
     frameState.cameraAltitude = cameraAltitude;
     frameState.cameraDistance = cameraDistance;
     frameState.pixelAngle = (2 * tanHalfFovY) / Math.max(1, gl.domElement.height);
+    frameState.principalOffsetY = principalOffset.current;
   }, FRAME_PRIORITY.CAMERA);
 
   return null;

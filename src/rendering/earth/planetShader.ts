@@ -35,6 +35,7 @@ uniform vec3 uCamFwd;
 uniform float uTanHalfFov;
 uniform float uAspect;
 uniform float uPixelAngle;      // 每像素对应的视角 [rad]
+uniform float uPrincipalOffsetY; // 画面主点的竖直偏移（NDC）：相机正前方投影到屏幕上的位置
 
 uniform vec3 uCamPos;           // 相机相对地心的位置 [km]
 uniform float uCSurf;           // |cam|² − R_地表² [km²]（CPU 双精度计算）
@@ -96,7 +97,9 @@ float cloudDensity(vec3 ecefDir, float footprintKm) {
 }
 
 void main() {
-  vec3 d = normalize(uCamFwd + (vNdc.x * uAspect * uTanHalfFov) * uCamRight + (vNdc.y * uTanHalfFov) * uCamUp);
+  vec3 d = normalize(
+    uCamFwd + (vNdc.x * uAspect * uTanHalfFov) * uCamRight + ((vNdc.y - uPrincipalOffsetY) * uTanHalfFov) * uCamUp
+  );
   float b = dot(uCamPos, d);
   float cosSun = dot(d, uSunDir);
 

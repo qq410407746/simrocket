@@ -7,7 +7,16 @@
  */
 import { FixedStepClock } from './FixedStepClock';
 import { Simulation, isValidVehicleState } from './Simulation';
-import { PHYSICS_DT, type SimCommand, type SimEvent, type SimSnapshot, type TimeWarp, isTimeWarp } from './types';
+import { buildSnapshot } from './snapshot';
+import {
+  PHYSICS_DT,
+  type SimCommand,
+  type SimEvent,
+  type SimSnapshot,
+  type TimeWarp,
+  clampTimeWarp,
+  isTimeWarp,
+} from './types';
 
 /** 建议的 tick 调用间隔 [ms]。 */
 export const HOST_TICK_INTERVAL_MS = 4;
@@ -25,6 +34,7 @@ export class SimulationHost {
   private simulation: Simulation | null = null;
   private readonly clock = new FixedStepClock(PHYSICS_DT, MAX_STEPS_PER_TICK);
   private paused = false;
+  /** 玩家指令的时间倍率。实际倍率还受物理状态限制，见 effectiveWarp。 */
   private timeWarp: TimeWarp = 1;
   private seq = 0;
   private lastTickMs: number | null = null;
@@ -42,6 +52,7 @@ export class SimulationHost {
 
   handle(command: SimCommand): void {
     try {
+      const sim = this.simulation;
       switch (command.type) {
         case 'init': {
           this.simulation = new Simulation(command.config);
@@ -58,22 +69,34 @@ export class SimulationHost {
             earthAngleAtEpoch: this.simulation.earthAngleAtEpoch,
             physicsDt: this.simulation.dt,
           });
-          this.publishSnapshot(this.now());
           break;
         }
         case 'setPaused':
           this.paused = command.paused;
-          this.publishSnapshot(this.now());
           break;
         case 'setTimeWarp':
           if (!isTimeWarp(command.warp)) throw new Error(`不支持的时间倍率：${String(command.warp)}`);
           this.timeWarp = command.warp;
-          this.publishSnapshot(this.now());
+          break;
+        case 'setThrottle':
+          sim?.setThrottle(command.throttle);
+          break;
+        case 'setAttitudeInput':
+          sim?.setAttitudeInput(command.input);
+          break;
+        case 'stage':
+          sim?.stage();
+          break;
+        case 'jettisonFairing':
+          sim?.jettisonFairing();
           break;
         case 'dispose':
           this.simulation = null;
-          break;
+          return;
       }
+      // 指令可能立即改变状态（点火、分级、倍率限制）：马上发布，界面不必等到下一个快照周期。
+      this.flushEvents();
+      this.publishSnapshot(this.now());
     } catch (error) {
       this.fail(error);
     }
@@ -89,13 +112,29 @@ export class SimulationHost {
       this.lastTickMs = nowMs;
 
       if (!this.paused && wallDt > 0) {
-        const { steps, requested, dropped } = this.clock.advance(wallDt, this.timeWarp);
-        for (let i = 0; i < steps; i++) sim.step();
-        if (requested > 0) {
+        // 物理状态对倍率的限制在每一步之后重新检查：例如以 1000× 滑行进入大气层时，
+        // 从进入的那一步起就按受限倍率推进，而不是等到下一个 tick。
+        let warp = clampTimeWarp(this.timeWarp, sim.maxTimeWarp);
+        const { steps, requested, dropped } = this.clock.advance(wallDt, warp);
+        let executed = 0;
+        for (; executed < steps; executed++) {
+          sim.step();
+          const limit = sim.maxTimeWarp;
+          if (limit < warp) {
+            // 条件变严：本 tick 剩余的步数按新倍率折算后丢弃（不计入"跟不上"的统计）。
+            warp = limit;
+            executed++;
+            this.clock.reset();
+            break;
+          }
+        }
+        if (this.timeWarp > warp) this.timeWarp = warp;
+        if (requested > 0 && executed === steps) {
           const ratio = 1 - dropped / requested;
           const alpha = 1 - Math.exp(-wallDt / RATE_SMOOTHING_TIME);
           this.achievedRatio += (ratio - this.achievedRatio) * alpha;
         }
+        this.flushEvents();
       }
 
       if (nowMs - this.lastSnapshotMs >= SNAPSHOT_INTERVAL_MS) this.publishSnapshot(nowMs);
@@ -104,22 +143,26 @@ export class SimulationHost {
     }
   }
 
+  private flushEvents(): void {
+    const events = this.simulation?.drainEvents() ?? [];
+    if (events.length > 0) this.emit({ type: 'flightEvents', events });
+  }
+
   private publishSnapshot(nowMs: number): void {
     const sim = this.simulation;
     if (!sim || this.faulted) return;
-    const vehicle = sim.getVehicleState();
-    if (!isValidVehicleState(vehicle) || !Number.isFinite(sim.time)) {
-      throw new Error(`物理状态出现无效数值（t = ${sim.time} s），模拟已停止。`);
-    }
-    const snapshot: SimSnapshot = {
+    // 玩家指令的倍率超过当前允许值时自动降档（并保持在降档后的值，不会自行回升）。
+    const maxTimeWarp = sim.maxTimeWarp;
+    if (this.timeWarp > maxTimeWarp) this.timeWarp = maxTimeWarp;
+    const snapshot: SimSnapshot = buildSnapshot(sim, {
       seq: this.seq++,
-      simTime: sim.time,
       timeWarp: this.timeWarp,
       paused: this.paused,
       simRate: this.paused ? 0 : this.timeWarp * this.achievedRatio,
-      earthRotationAngle: sim.earthRotationAngle,
-      vehicle,
-    };
+    });
+    if (!isValidVehicleState(snapshot.vehicle) || !Number.isFinite(snapshot.simTime)) {
+      throw new Error(`物理状态出现无效数值（t = ${sim.time} s），模拟已停止。`);
+    }
     this.lastSnapshotMs = nowMs;
     this.emit({ type: 'snapshot', snapshot });
   }

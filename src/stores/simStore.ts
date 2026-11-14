@@ -3,11 +3,14 @@
  * 渲染层不读这个 store，而是直接读 simRuntime 中的快照缓冲。
  */
 import { create } from 'zustand';
-import type { TimeWarp } from '@/game/simulation/types';
+import type { FlightEvent, FlightOutcome, FlightStats, TimeWarp } from '@/game/simulation/types';
 import type { Telemetry } from '@/game/telemetry/telemetry';
 import type { SimulationExecution } from '@/workers/SimulationClient';
 
 export type SimStatus = 'idle' | 'starting' | 'running' | 'error';
+
+/** 事件记录里保留的最近事件条数。 */
+export const EVENT_LOG_LIMIT = 30;
 
 interface SimState {
   status: SimStatus;
@@ -17,18 +20,33 @@ interface SimState {
   telemetry: Telemetry | null;
   paused: boolean;
   timeWarp: TimeWarp;
+  /** 当前物理状态允许的最大时间倍率。 */
+  maxTimeWarp: TimeWarp;
   /** 实际模拟速率 [模拟秒/墙钟秒]。 */
   simRate: number;
   epochJulianDate: number | null;
+  /** 起飞时刻的模拟时间 [s]；未起飞为 null。 */
+  liftoffTime: number | null;
+  stats: FlightStats | null;
+  outcome: FlightOutcome | null;
+  /** 最近的飞行事件，按时间先后排列。 */
+  events: readonly FlightEvent[];
 }
 
-export const useSimStore = create<SimState>()(() => ({
+export const INITIAL_SIM_STATE: SimState = {
   status: 'idle',
   errorMessage: null,
   execution: null,
   telemetry: null,
   paused: false,
   timeWarp: 1,
+  maxTimeWarp: 1000,
   simRate: 0,
   epochJulianDate: null,
-}));
+  liftoffTime: null,
+  stats: null,
+  outcome: null,
+  events: [],
+};
+
+export const useSimStore = create<SimState>()(() => ({ ...INITIAL_SIM_STATE }));

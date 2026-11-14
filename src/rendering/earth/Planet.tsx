@@ -63,6 +63,7 @@ export function Planet() {
           uTanHalfFov: { value: 0.41 },
           uAspect: { value: 1 },
           uPixelAngle: { value: 0.001 },
+          uPrincipalOffsetY: { value: 0 },
           uCamPos: { value: new Vector3(20_000, 0, 0) },
           uCSurf: { value: 1 },
           uCCloud: { value: 1 },
@@ -111,6 +112,7 @@ export function Planet() {
     u.uTanHalfFov!.value = Math.tan((camera.fov * Math.PI) / 360);
     u.uAspect!.value = camera.aspect;
     u.uPixelAngle!.value = frameState.pixelAngle;
+    u.uPrincipalOffsetY!.value = frameState.principalOffsetY;
 
     eciToRender(cam, u.uCamPos!.value as Vector3).multiplyScalar(1e-3);
     u.uCSurf!.value = sphereC(r, R_SURFACE);

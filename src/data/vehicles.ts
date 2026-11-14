@@ -5,7 +5,8 @@
  * （煤油/液氧燃气发生器循环发动机、氢氧上面级等），以保证物理上自洽。
  * 飞行性能（Δv、推重比）一律由 game/vehicles/analysis.ts 从这些参数计算得出，不在此处手写。
  *
- * 注意：气动与热防护参数为初始取值，尚未经过飞行模拟校准（阶段二、阶段四进行）。
+ * 气动参数为典型量级的工程估计（阻力模型见 physics/aerodynamics/drag.ts）；
+ * 热防护参数尚无模型消费（阶段四）。
  */
 import { DEG2RAD } from '@/game/physics/constants';
 import type { EngineDefinition, VehicleDefinition } from '@/game/vehicles/types';
@@ -92,7 +93,7 @@ const METEOR_S: VehicleDefinition = {
       engine: SPARK_2,
       engineCount: 1,
       geometry: { diameter: 2.2, length: 13 },
-      aero: { referenceArea: circleArea(2.2), dragCoefficient: 0.3 },
+      aero: { referenceArea: circleArea(2.2), dragCoefficient: 0.3, shape: 'slender' },
     },
   ],
   payload: {
@@ -104,7 +105,7 @@ const METEOR_S: VehicleDefinition = {
     engine: null,
     engineCount: 0,
     geometry: { diameter: 2.2, length: 2.3 },
-    aero: { referenceArea: circleArea(2.2), dragCoefficient: 1.3 },
+    aero: { referenceArea: circleArea(2.2), dragCoefficient: 1.3, shape: 'blunt' },
     heatShield: {
       noseRadius: 2.6,
       emissivity: 0.85,
@@ -131,7 +132,7 @@ const FRONTIER_1: VehicleDefinition = {
       engine: EMBER_1A,
       engineCount: 9,
       geometry: { diameter: 3.8, length: 40 },
-      aero: { referenceArea: circleArea(3.8), dragCoefficient: 0.3 },
+      aero: { referenceArea: circleArea(3.8), dragCoefficient: 0.3, shape: 'slender' },
     },
     {
       id: 'frontier-1-s2',
@@ -141,7 +142,7 @@ const FRONTIER_1: VehicleDefinition = {
       engine: EMBER_1V,
       engineCount: 1,
       geometry: { diameter: 3.8, length: 12 },
-      aero: { referenceArea: circleArea(3.8), dragCoefficient: 0.3 },
+      aero: { referenceArea: circleArea(3.8), dragCoefficient: 0.3, shape: 'slender' },
     },
   ],
   payload: {
@@ -153,7 +154,7 @@ const FRONTIER_1: VehicleDefinition = {
     engine: WREN_OMS,
     engineCount: 4,
     geometry: { diameter: 3.8, length: 3.9 },
-    aero: { referenceArea: circleArea(3.8), dragCoefficient: 1.3 },
+    aero: { referenceArea: circleArea(3.8), dragCoefficient: 1.3, shape: 'blunt' },
     heatShield: {
       noseRadius: 4.6,
       emissivity: 0.85,
@@ -180,7 +181,7 @@ const ZENITH_3: VehicleDefinition = {
       engine: EMBER_1A,
       engineCount: 9,
       geometry: { diameter: 4.2, length: 37 },
-      aero: { referenceArea: circleArea(4.2), dragCoefficient: 0.3 },
+      aero: { referenceArea: circleArea(4.2), dragCoefficient: 0.3, shape: 'slender' },
     },
     {
       id: 'zenith-3-s2',
@@ -190,7 +191,7 @@ const ZENITH_3: VehicleDefinition = {
       engine: EMBER_1V,
       engineCount: 1,
       geometry: { diameter: 4.2, length: 11.5 },
-      aero: { referenceArea: circleArea(4.2), dragCoefficient: 0.3 },
+      aero: { referenceArea: circleArea(4.2), dragCoefficient: 0.3, shape: 'slender' },
     },
     {
       id: 'zenith-3-s3',
@@ -200,7 +201,7 @@ const ZENITH_3: VehicleDefinition = {
       engine: AURORA_H,
       engineCount: 1,
       geometry: { diameter: 4.2, length: 9 },
-      aero: { referenceArea: circleArea(4.2), dragCoefficient: 0.3 },
+      aero: { referenceArea: circleArea(4.2), dragCoefficient: 0.3, shape: 'slender' },
     },
   ],
   payload: {
@@ -212,7 +213,7 @@ const ZENITH_3: VehicleDefinition = {
     engine: null,
     engineCount: 0,
     geometry: { diameter: 2.6, length: 4.2 },
-    aero: { referenceArea: circleArea(2.6), dragCoefficient: 2.2 },
+    aero: { referenceArea: circleArea(2.6), dragCoefficient: 2.2, shape: 'blunt' },
     fairing: {
       mass: 1_900,
       geometry: { diameter: 4.6, length: 11 },

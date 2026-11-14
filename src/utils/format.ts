@@ -86,3 +86,14 @@ export const formatUtc = (julianDate: number): string => {
     `${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}:${pad2(d.getUTCSeconds())} UTC`
   );
 };
+
+/** 压力：Pa / kPa。 */
+export const formatPressure = (pascal: number): Formatted => {
+  if (!Number.isFinite(pascal)) return { value: PLACEHOLDER, unit: 'kPa' };
+  if (Math.abs(pascal) < 100) return { value: fixed(pascal, 1), unit: 'Pa' };
+  return { value: fixed(pascal / 1000, 2), unit: 'kPa' };
+};
+
+/** 任务时间："T+ 00:02:32"；尚未起飞时为 "T− 00:00:00"。 */
+export const formatMissionTime = (seconds: number | null): string =>
+  seconds === null ? 'T− 00:00:00' : `T+ ${formatDuration(seconds)}`;

@@ -4,7 +4,7 @@ import { sunDirectionEci } from '@/game/physics/ephemeris/sun';
 import { bodyToFrame, earthRotationAngle, ecefToEci, geodeticToEcef } from '@/game/physics/frames/frames';
 import { isFiniteQuat } from '@/game/physics/math/quat';
 import { addScaled, isFiniteVec3, vec3 } from '@/game/physics/math/vec3';
-import { vehicleHeight } from '@/game/vehicles/analysis';
+import { stackHeight } from '@/game/vehicles/configuration';
 import { simRuntime } from '@/stores/simRuntime';
 import { FRAME_PRIORITY, frameState } from './frameState';
 
@@ -27,13 +27,15 @@ export function FrameDriver() {
 
     const sinceArrival = (performance.now() - snapshots.latestArrival) / 1000;
     const t = simRuntime.renderClock.update(delta, latest, sinceArrival);
-    const motion = snapshots.sample(t);
-    if (!motion || !Number.isFinite(t) || !isFiniteVec3(motion.position) || !isFiniteQuat(motion.attitude)) return;
+    const sample = snapshots.sampleForRender(t);
+    if (!sample || !Number.isFinite(t)) return;
+    const { motion, state } = sample;
+    if (!isFiniteVec3(motion.position) || !isFiniteVec3(motion.velocity) || !isFiniteQuat(motion.attitude)) return;
 
     const earthAngle = earthRotationAngle(simRuntime.earthAngleAtEpoch, t);
     const julianDate = julianDateAt(config.epochJulianDate, t);
-    const height = vehicleHeight(config.vehicle);
-    const comHeight = latest.vehicle.centerOfMassHeight;
+    const height = stackHeight(config.vehicle, state.vehicle);
+    const comHeight = state.vehicle.centerOfMassHeight;
     const nose = bodyToFrame(motion.attitude, BODY_X);
 
     frameState.simTime = t;
@@ -41,7 +43,10 @@ export function FrameDriver() {
     frameState.earthAngle = earthAngle;
     frameState.sunDirection = sunDirectionEci(julianDate);
     frameState.vehiclePosition = motion.position;
+    frameState.vehicleVelocity = motion.velocity;
     frameState.vehicleAttitude = motion.attitude;
+    frameState.snapshot = state;
+    frameState.debris = sample.debris;
     frameState.centerOfMassHeight = comHeight;
     frameState.vehicleHeight = height;
     frameState.vehicleFocus = addScaled(motion.position, nose, height / 2 - comHeight);

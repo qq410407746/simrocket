@@ -5,7 +5,17 @@ import { bodyToFrame, enuBasisAt } from '../physics/frames/frames';
 import { distance, dot, vec3 } from '../physics/math/vec3';
 import { getVehicleOrDefault } from '@/data/vehicles';
 import { Simulation } from './Simulation';
-import { RENDER_DELAY, RenderClock, SnapshotBuffer, hermitePosition, hermiteVelocity, interpolateMotion } from './interpolation';
+import { buildSnapshot } from './snapshot';
+import {
+  RENDER_DELAY,
+  RenderClock,
+  SnapshotBuffer,
+  hasDiscontinuity,
+  hermitePosition,
+  hermiteVelocity,
+  interpolateDebris,
+  interpolateMotion,
+} from './interpolation';
 import type { SimSnapshot, SimulationConfig } from './types';
 
 const config: SimulationConfig = {
@@ -18,15 +28,7 @@ const config: SimulationConfig = {
 const snapshotAt = (t: number, seq = 0, simRate = 1): SimSnapshot => {
   const sim = new Simulation(config, t > 0 ? t : 1);
   if (t > 0) sim.step();
-  return {
-    seq,
-    simTime: sim.time,
-    timeWarp: 1,
-    paused: false,
-    simRate,
-    earthRotationAngle: sim.earthRotationAngle,
-    vehicle: sim.getVehicleState(),
-  };
+  return buildSnapshot(sim, { seq, timeWarp: 1, paused: false, simRate });
 };
 
 describe('Hermite 插值', () => {
@@ -160,5 +162,70 @@ describe('RenderClock', () => {
     clock.update(1 / 60, { ...snapshotAt(1), simTime: 10, simRate: 1 }, 0);
     const t = clock.update(1 / 60, { ...snapshotAt(1), simTime: 5000, simRate: 1 }, 0);
     expect(t).toBeCloseTo(5000 - RENDER_DELAY, 6);
+  });
+});
+
+describe('分级前后的渲染采样', () => {
+  /** 飞行 40 s 后分级，返回分级前后相邻的两个快照。 */
+  const stagingPair = () => {
+    const sim = new Simulation(config);
+    sim.stage();
+    for (let i = 0; i < 2000; i++) sim.step();
+    const before = buildSnapshot(sim, { seq: 0, timeWarp: 1, paused: false, simRate: 1 });
+    sim.stage();
+    sim.step();
+    const after = buildSnapshot(sim, { seq: 1, timeWarp: 1, paused: false, simRate: 1 });
+    return { before, after };
+  };
+
+  it('识别分级造成的不连续', () => {
+    const { before, after } = stagingPair();
+    expect(hasDiscontinuity(before, after)).toBe(true);
+    expect(hasDiscontinuity(before, before)).toBe(false);
+    // 质心在箭体内上移了几十米：两个快照的位置差远大于一个步长内的飞行距离
+    const jump = distance(after.vehicle.body.position, before.vehicle.body.position);
+    expect(jump).toBeGreaterThan(20);
+  });
+
+  it('不跨越分级做插值：区间内的位置始终与后一个快照的构型一致', () => {
+    const { before, after } = stagingPair();
+    const t = (before.simTime + after.simTime) / 2;
+    const m = interpolateMotion(before, after, t);
+    const expected = {
+      x: after.vehicle.body.position.x + after.vehicle.body.velocity.x * (t - after.simTime),
+      y: after.vehicle.body.position.y + after.vehicle.body.velocity.y * (t - after.simTime),
+      z: after.vehicle.body.position.z + after.vehicle.body.velocity.z * (t - after.simTime),
+    };
+    expect(distance(m.position, expected)).toBeLessThan(1e-9);
+  });
+
+  it('渲染采样返回一致的离散状态，并把新出现的分离体对齐到同一时刻', () => {
+    const { before, after } = stagingPair();
+    const buffer = new SnapshotBuffer();
+    buffer.push(before, 0);
+    buffer.push(after, 16);
+    const t = (before.simTime + after.simTime) / 2;
+    const sample = buffer.sampleForRender(t)!;
+    expect(sample.state).toBe(after);
+    expect(sample.debris).toHaveLength(1);
+    // 分离体与飞行器的间距应等于后一个快照中的间距（两者按各自速度反推，相对速度只有 1.5 m/s）
+    const gapAfter = distance(after.vehicle.body.position, after.debris[0]!.position);
+    const gapSample = distance(sample.motion.position, sample.debris[0]!.position);
+    expect(Math.abs(gapSample - gapAfter)).toBeLessThan(0.05);
+  });
+
+  it('已存在的分离体在快照之间做 Hermite 插值', () => {
+    const sim = new Simulation(config);
+    sim.stage();
+    for (let i = 0; i < 2000; i++) sim.step();
+    sim.stage();
+    for (let i = 0; i < 50; i++) sim.step();
+    const a = buildSnapshot(sim, { seq: 0, timeWarp: 1, paused: false, simRate: 1 });
+    sim.step();
+    const mid = buildSnapshot(sim, { seq: 1, timeWarp: 1, paused: false, simRate: 1 });
+    sim.step();
+    const b = buildSnapshot(sim, { seq: 2, timeWarp: 1, paused: false, simRate: 1 });
+    const [d] = interpolateDebris(a, b, mid.simTime);
+    expect(distance(d!.position, mid.debris[0]!.position)).toBeLessThan(1e-3);
   });
 });

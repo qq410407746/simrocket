@@ -9,6 +9,7 @@
  */
 import { IDENTITY, type Quat } from '@/game/physics/math/quat';
 import { type Vec3, UNIT_X, vec3 } from '@/game/physics/math/vec3';
+import type { DebrisState, SimSnapshot } from '@/game/simulation/types';
 
 export interface FrameState {
   /** 是否已有可渲染的数据。为 false 时场景对象应隐藏。 */
@@ -21,12 +22,20 @@ export interface FrameState {
   sunDirection: Vec3;
   /** 飞行器质心位置 [m]。 */
   vehiclePosition: Vec3;
+  /** 飞行器速度 [m/s]（惯性速度）。 */
+  vehicleVelocity: Vec3;
   /** 飞行器姿态（机体系 → ECI）。 */
   vehicleAttitude: Quat;
   /** 质心到飞行器底端的距离 [m]。 */
   centerOfMassHeight: number;
-  /** 飞行器总高度 [m]。 */
+  /** 飞行器当前构型的总高度 [m]。 */
   vehicleHeight: number;
+  /**
+   * 与本帧运动状态一致的快照：构型（哪些级还连接）、发动机状态等离散量从这里读取。
+   */
+  snapshot: SimSnapshot | null;
+  /** 本帧的分离体（已插值到渲染时刻）。 */
+  debris: readonly DebrisState[];
   /** 飞行器几何中心 [m]——相机注视点。 */
   vehicleFocus: Vec3;
   /** 发射场地面点 [m]。 */
@@ -39,6 +48,11 @@ export interface FrameState {
   cameraDistance: number;
   /** 每像素对应的视角 [rad]（竖直方向）。 */
   pixelAngle: number;
+  /**
+   * 画面主点的竖直偏移（NDC，向上为正）：相机正前方投影到屏幕上的位置。
+   * 飞行界面把主点上移，给下方的导航球让出空间。
+   */
+  principalOffsetY: number;
 }
 
 export const frameState: FrameState = {
@@ -48,7 +62,10 @@ export const frameState: FrameState = {
   earthAngle: 0,
   sunDirection: UNIT_X,
   vehiclePosition: vec3(6_371_000, 0, 0),
+  vehicleVelocity: vec3(0, 0, 0),
   vehicleAttitude: IDENTITY,
+  snapshot: null,
+  debris: [],
   centerOfMassHeight: 0,
   vehicleHeight: 1,
   vehicleFocus: vec3(6_371_000, 0, 0),
@@ -57,6 +74,7 @@ export const frameState: FrameState = {
   cameraAltitude: 13_629_000,
   cameraDistance: 13_629_000,
   pixelAngle: 0.001,
+  principalOffsetY: 0,
 };
 
 /** 渲染回调的执行顺序（useFrame 优先级；负数先执行且不接管渲染循环）。 */

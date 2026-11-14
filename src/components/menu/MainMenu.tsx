@@ -151,7 +151,7 @@ export function MainMenu() {
             </div>
           </div>
           <p className="text-[10px] leading-relaxed text-ink-faint">
-            开发阶段 1 / 7 · 基础场景与工程架构。发动机点火与飞行动力学将在阶段二实现。拖动画面可旋转地球。
+            开发阶段 2 / 7 · 可以点火起飞、分级并尝试入轨。轨道参数显示与轨道地图属于阶段三，降落伞与热防护属于阶段四。
           </p>
         </footer>
       </div>

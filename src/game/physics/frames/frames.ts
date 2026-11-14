@@ -148,8 +148,12 @@ export interface PointingAngles {
   readonly heading: number | null;
 }
 
-/** 竖直判定阈值：水平分量小于该值时认为航向无定义。 */
-const HEADING_UNDEFINED_EPS = 1e-6;
+/**
+ * 竖直判定阈值：头部方向的水平分量小于该值（约 0.3°）时认为航向无定义。
+ * 竖直上升时，惯性姿态保持相对当地垂线会有极小的漂移（地球自转 15°/h），
+ * 此时算出的"航向"没有操作意义。
+ */
+const HEADING_UNDEFINED_EPS = 5e-3;
 
 /**
  * 由姿态四元数与位置计算俯仰角与航向角。
