@@ -11,6 +11,7 @@ import {
   clampAboveGround,
   computeCameraPose,
   easeInOut,
+  fitMapView,
   inertialAnglesFromDirection,
 } from '../cameras/cameraMath';
 import {
@@ -22,6 +23,7 @@ import {
   starVisibility,
   sunTransmittance,
 } from '../earth/atmosphereModel';
+import { isOccludedByEarth } from './occlusion';
 import { eciOrientationToRender, eciToRender, eciToRenderRelative } from './renderSpace';
 
 describe('ECI → 渲染空间', () => {
@@ -245,5 +247,85 @@ describe('摄像机位姿', () => {
     const angles = inertialAnglesFromDirection(sub(pose.position, highFocus));
     expect(angles.azimuth).toBeCloseTo(0.7, 9);
     expect(angles.elevation).toBeCloseTo(-0.3, 9);
+  });
+});
+
+describe('轨道地图取景', () => {
+  const radius = EARTH.RADIUS + 200_000;
+  const position = vec3(radius, 0, 0);
+  const velocity = vec3(0, 7_000, 3_000);
+
+  it('map：以地心为中心的惯性视角，相机注视地心', () => {
+    const view = fitMapView(position, velocity, radius);
+    const pose = computeCameraPose('map', view, { focus: position, site: position });
+    expect(length(pose.target)).toBe(0);
+    expect(length(pose.position)).toBeCloseTo(view.distance, 3);
+  });
+
+  it('相机在轨道面的北侧并偏向飞行器一侧：轨道呈张开的椭圆，飞行器在近处', () => {
+    const view = fitMapView(position, velocity, radius);
+    const pose = computeCameraPose('map', view, { focus: position, site: position });
+    const direction = normalize(pose.position);
+    const orbitNormal = normalize(cross(position, velocity));
+    // 与轨道面法线的夹角约 37°（0.8 / 0.6 的合成）
+    expect(dot(direction, orbitNormal)).toBeCloseTo(0.8, 6);
+    expect(dot(direction, normalize(position))).toBeCloseTo(0.6, 6);
+    expect(direction.z).toBeGreaterThan(0);
+
+    // 逆行轨道（角动量指向南）：仍然从北侧看
+    const retro = fitMapView(position, vec3(0, -7_000, 3_000), radius);
+    const retroPose = computeCameraPose('map', retro, { focus: position, site: position });
+    expect(retroPose.position.z).toBeGreaterThan(0);
+  });
+
+  it('距离随远地点增大，使整条轨道落在画面内；有上下限', () => {
+    const low = fitMapView(position, velocity, radius);
+    const high = fitMapView(position, velocity, 42_164_000);
+    expect(low.distance).toBeCloseTo(5.4 * radius, 3);
+    expect(high.distance).toBeCloseTo(5.4 * 42_164_000, 3);
+    // 竖直视场 45°：轨道的角半径 atan(1/5.4) ≈ 10.5°，小于半视场 22.5°
+    expect(Math.atan(1 / 5.4)).toBeLessThan((22.5 * Math.PI) / 180);
+    // 发射台上（"轨道"在地下）按地球半径取景；逃逸轨道（远地点无穷远）有上限
+    expect(fitMapView(position, velocity, 1_000).distance).toBeCloseTo(5.4 * EARTH.RADIUS, 3);
+    expect(fitMapView(position, velocity, Infinity).distance).toBeCloseTo(5.4 * 12 * EARTH.RADIUS, 3);
+    expect(fitMapView(position, velocity, Infinity).distance).toBeLessThanOrEqual(MODE_LIMITS.map.maxDistance);
+  });
+
+  it('退化输入（速度为零、位置在地心）不产生 NaN', () => {
+    for (const view of [fitMapView(position, vec3(0, 0, 0), radius), fitMapView(vec3(0, 0, 0), vec3(0, 0, 0), NaN)]) {
+      expect(Number.isFinite(view.azimuth)).toBe(true);
+      expect(Number.isFinite(view.elevation)).toBe(true);
+    }
+    expect(Number.isFinite(fitMapView(position, vec3(0, 0, 0), radius).distance)).toBe(true);
+  });
+});
+
+describe('地球遮挡判断', () => {
+  const camera = vec3(4 * EARTH.RADIUS, 0, 0);
+
+  it('地球背面的点被遮挡，正面与侧面的点不被遮挡', () => {
+    expect(isOccludedByEarth(camera, vec3(-(EARTH.RADIUS + 200_000), 0, 0))).toBe(true);
+    expect(isOccludedByEarth(camera, vec3(EARTH.RADIUS + 200_000, 0, 0))).toBe(false);
+    expect(isOccludedByEarth(camera, vec3(0, 2 * EARTH.RADIUS, 0))).toBe(false);
+    // 相机背后的点
+    expect(isOccludedByEarth(camera, vec3(6 * EARTH.RADIUS, 0, 0))).toBe(false);
+  });
+
+  it('刚越过地平线的低轨道点：视线擦过地球则被遮挡', () => {
+    // 从相机看，地球边缘（切点）与地心方向的夹角为 asin(R/d)；切点的地心角为 acos(R/d)
+    const limbAngle = Math.acos(EARTH.RADIUS / (4 * EARTH.RADIUS));
+    const r = EARTH.RADIUS + 200_000;
+    const at = (angle: number) => vec3(r * Math.cos(angle), r * Math.sin(angle), 0);
+    expect(isOccludedByEarth(camera, at(limbAngle))).toBe(false);
+    expect(isOccludedByEarth(camera, at(limbAngle + 0.6))).toBe(true);
+    // 轨道高出地面 200 km：越过切点后还有一小段仍然可见
+    expect(isOccludedByEarth(camera, at(limbAngle + 0.1))).toBe(false);
+  });
+
+  it('地面上的点不会被自身所在的地面误判为遮挡；重合点与无效输入返回 false', () => {
+    expect(isOccludedByEarth(camera, vec3(EARTH.RADIUS, 0, 0))).toBe(false);
+    expect(isOccludedByEarth(camera, vec3(EARTH.RADIUS * Math.cos(0.5), EARTH.RADIUS * Math.sin(0.5), 0))).toBe(false);
+    expect(isOccludedByEarth(camera, camera)).toBe(false);
+    expect(isOccludedByEarth(camera, vec3(NaN, 0, 0))).toBe(false);
   });
 });

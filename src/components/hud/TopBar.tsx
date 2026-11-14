@@ -22,9 +22,10 @@ const phaseLabel = (t: Telemetry | null): PhaseLabel => {
   }
   if (t.phase === 'landed') return { text: '已着陆', code: 'LANDED', tone: 'border-ok/60 text-ok' };
   if (t.phase === 'destroyed') return { text: '飞行器损毁', code: 'LOSS OF VEHICLE', tone: 'border-danger/70 text-danger' };
-  return t.thrust > 0
-    ? { text: '动力飞行', code: 'POWERED FLIGHT', tone: 'border-ok/60 text-ok' }
-    : { text: '无动力滑行', code: 'COAST', tone: 'border-data/60 text-data' };
+  if (t.thrust > 0) return { text: '动力飞行', code: 'POWERED FLIGHT', tone: 'border-ok/60 text-ok' };
+  if (t.orbit?.classification === 'orbit') return { text: '在轨滑行', code: 'ON ORBIT', tone: 'border-ok/60 text-ok' };
+  if (t.orbit?.classification === 'escape') return { text: '逃逸轨道', code: 'ESCAPE', tone: 'border-data/60 text-data' };
+  return { text: '无动力滑行', code: 'COAST', tone: 'border-data/60 text-data' };
 };
 
 /** 顶部状态栏：任务阶段、任务时钟、UTC、实测性能。 */

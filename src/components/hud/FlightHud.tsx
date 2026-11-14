@@ -1,6 +1,7 @@
 import { ControlBar } from './ControlBar';
 import { FlightFeed } from './FlightFeed';
 import { FlightSummary } from './FlightSummary';
+import { MapOverlay } from './MapOverlay';
 import { NavBall } from './NavBall';
 import { TelemetryPanel } from './TelemetryPanel';
 import { TopBar } from './TopBar';
@@ -20,8 +21,11 @@ export function FlightHud() {
         <div className="scroll-thin pointer-events-auto max-h-full self-start overflow-y-auto rounded-lg">
           <TelemetryPanel />
         </div>
-        <div className="pointer-events-none flex min-w-0 flex-1 flex-col items-center justify-between">
+        <div className="pointer-events-none relative flex min-w-0 flex-1 flex-col items-center justify-between">
           <FlightFeed />
+          <div className="absolute top-0 left-0">
+            <MapOverlay />
+          </div>
           <NavBall />
         </div>
         <div className="scroll-thin pointer-events-auto max-h-full self-start overflow-y-auto rounded-lg">

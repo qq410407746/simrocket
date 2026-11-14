@@ -1,10 +1,10 @@
 import { getVehicleOrDefault } from '@/data/vehicles';
 import type { FlightEvent } from '@/game/simulation/types';
-import type { Telemetry } from '@/game/telemetry/telemetry';
 import type { VehicleDefinition } from '@/game/vehicles/types';
 import { useGameStore } from '@/stores/gameStore';
 import { useSimStore } from '@/stores/simStore';
-import { formatDuration, formatNumber } from '@/utils/format';
+import { formatDuration } from '@/utils/format';
+import { flightHint } from './flightHints';
 
 const stageName = (vehicle: VehicleDefinition, index: number): string => vehicle.stages[index]?.name ?? '';
 
@@ -37,46 +37,22 @@ const TONE: Partial<Record<FlightEvent['kind'], string>> = {
   depleted: 'text-warn',
 };
 
-/**
- * 根据当前物理状态给出一句操作提示（面向没有航天知识的玩家）。
- * 没有需要提示的情况时返回 null。
- */
-export const flightHint = (t: Telemetry | null, vehicle: VehicleDefinition): { text: string; tone: 'info' | 'warn' } | null => {
-  if (!t) return null;
-  if (t.phase === 'prelaunch') {
-    if (!t.ignited) return { text: '按 空格 点火起飞', tone: 'info' };
-    if (t.throttle <= 0) return { text: '节流阀为 0：按 Z 或 ↑ 增大推力', tone: 'warn' };
-    if (t.thrust > 0 && t.thrustToWeight <= 1) {
-      return { text: `推力不足，无法离开发射台（推重比 ${formatNumber(t.thrustToWeight, 2)}）——增大节流`, tone: 'warn' };
-    }
-    return null;
-  }
-  if (t.phase !== 'flight') return null;
-  const stage = vehicle.stages[t.activeStageIndex];
-  if (stage && (t.stagePropellant[t.activeStageIndex] ?? 0) <= 0) {
-    return { text: `${stage.name}推进剂耗尽：按 空格 分离`, tone: 'warn' };
-  }
-  if (t.ignited && t.throttle <= 0 && stage) return { text: '发动机已关机：按 Z 或 ↑ 恢复推力', tone: 'info' };
-  if (t.altitude < 20_000 && t.verticalSpeed < -20) return { text: '正在下降，高度不足', tone: 'warn' };
-  if (t.dynamicPressure > 5_000 && t.angleOfAttack > 0.35) return { text: '动压较大时迎角过大：让头部靠近速度方向', tone: 'warn' };
-  if (t.missionTime !== null && t.missionTime < 12 && t.pitch > 1.55) return { text: '速度达到约 60 m/s 后，按住 D 向东缓慢倾斜（重力转弯）', tone: 'info' };
-  return null;
-};
-
 /** 屏幕上方居中的操作提示与最近的飞行事件。 */
 export function FlightFeed() {
   const vehicle = getVehicleOrDefault(useGameStore((s) => s.vehicleId));
   const telemetry = useSimStore((s) => s.telemetry);
   const events = useSimStore((s) => s.events);
   const liftoffTime = useSimStore((s) => s.liftoffTime);
+  const mapMode = useGameStore((s) => s.cameraMode === 'map');
   const hint = flightHint(telemetry, vehicle);
   const recent = events.slice(-4);
 
   return (
-    <div className="pointer-events-none flex flex-col items-center gap-2">
+    // 地图视角下左上角是地图图例（宽 15rem）：提示与事件记录让到它的右边
+    <div className={`pointer-events-none flex w-full flex-col items-center gap-2 ${mapMode ? 'pl-[15.75rem]' : ''}`}>
       {hint && (
         <div
-          className={`panel-frame rounded-md px-3 py-1 text-[12px] backdrop-blur-md ${hint.tone === 'warn' ? 'text-warn' : 'text-data'}`}
+          className={`panel-frame max-w-full rounded-md px-3 py-1 text-center text-[12px] leading-snug backdrop-blur-md ${hint.tone === 'warn' ? 'text-warn' : 'text-data'}`}
           data-testid="flight-hint"
         >
           {hint.text}

@@ -21,7 +21,9 @@ export const julianDateAt = (epochJd: number, simTime: number): number =>
 /** 把角度归一化到 [0, 2π)。 */
 export const wrapTwoPi = (angle: number): number => {
   const a = angle % TWO_PI;
-  return a < 0 ? a + TWO_PI : a;
+  const b = a < 0 ? a + TWO_PI : a;
+  // 极小的负数加 2π 后会舍入成恰好 2π
+  return b >= TWO_PI ? 0 : b;
 };
 
 /**

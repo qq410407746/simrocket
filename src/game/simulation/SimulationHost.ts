@@ -22,6 +22,8 @@ import {
 export const HOST_TICK_INTERVAL_MS = 4;
 /** 快照发布的最小间隔 [ms]（约 60 Hz）。 */
 export const SNAPSHOT_INTERVAL_MS = 1000 / 60;
+/** 轨迹预测的发布间隔 [ms]。 */
+export const PREDICTION_INTERVAL_MS = 500;
 /**
  * 单次 tick 最多执行的物理步数。
  * 1000× 倍率、4 ms tick 需要约 200 步；留出余量并防止卡顿后补算过多。
@@ -39,6 +41,8 @@ export class SimulationHost {
   private seq = 0;
   private lastTickMs: number | null = null;
   private lastSnapshotMs = -Infinity;
+  private lastPredictionMs = -Infinity;
+  private hadPrediction = false;
   /** 实际推进量 / 请求推进量 的平滑值；1 表示完全跟上指令倍率。 */
   private achievedRatio = 1;
   private faulted = false;
@@ -63,6 +67,8 @@ export class SimulationHost {
           this.achievedRatio = 1;
           this.faulted = false;
           this.lastTickMs = null;
+          this.lastPredictionMs = -Infinity;
+          this.hadPrediction = false;
           this.emit({
             type: 'ready',
             epochJulianDate: this.simulation.epochJulianDate,
@@ -83,6 +89,9 @@ export class SimulationHost {
           break;
         case 'setAttitudeInput':
           sim?.setAttitudeInput(command.input);
+          break;
+        case 'setAttitudeMode':
+          sim?.setAttitudeMode(command.mode);
           break;
         case 'stage':
           sim?.stage();
@@ -138,9 +147,19 @@ export class SimulationHost {
       }
 
       if (nowMs - this.lastSnapshotMs >= SNAPSHOT_INTERVAL_MS) this.publishSnapshot(nowMs);
+      if (nowMs - this.lastPredictionMs >= PREDICTION_INTERVAL_MS) this.publishPrediction(nowMs);
     } catch (error) {
       this.fail(error);
     }
+  }
+
+  /** 轨迹预测（约 2 Hz）。从"有预测"变为"不适用"时发一次 null 以清除界面上的旧轨迹。 */
+  private publishPrediction(nowMs: number): void {
+    this.lastPredictionMs = nowMs;
+    const prediction = this.simulation?.predictTrajectory() ?? null;
+    if (prediction === null && !this.hadPrediction) return;
+    this.hadPrediction = prediction !== null;
+    this.emit({ type: 'prediction', prediction });
   }
 
   private flushEvents(): void {

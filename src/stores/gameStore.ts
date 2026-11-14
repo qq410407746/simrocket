@@ -8,9 +8,12 @@ import { DEFAULT_VEHICLE_ID, findVehicle } from '@/data/vehicles';
 
 export type Screen = 'menu' | 'flight';
 
-/** 摄像机模式。'map'（轨道地图）在阶段三实现。 */
-export type CameraMode = 'chase' | 'free' | 'pad' | 'orbit';
-export const CAMERA_MODES: readonly CameraMode[] = ['chase', 'free', 'pad', 'orbit'];
+/** 摄像机模式。 */
+export type CameraMode = 'chase' | 'free' | 'pad' | 'orbit' | 'map';
+export const CAMERA_MODES: readonly CameraMode[] = ['chase', 'free', 'pad', 'orbit', 'map'];
+
+/** 出发点：发射台，或直接从 200 km 近地轨道开始（沙盒用，跳过上升段）。 */
+export type StartMode = 'pad' | 'orbit';
 
 export type GraphicsQuality = 'low' | 'medium' | 'high';
 
@@ -19,12 +22,14 @@ interface GameState {
   vehicleId: string;
   siteId: string;
   cameraMode: CameraMode;
+  startMode: StartMode;
   quality: GraphicsQuality;
   selectVehicle: (id: string) => void;
   selectSite: (id: string) => void;
   enterFlight: () => void;
   returnToMenu: () => void;
   setCameraMode: (mode: CameraMode) => void;
+  setStartMode: (mode: StartMode) => void;
   setQuality: (quality: GraphicsQuality) => void;
 }
 
@@ -35,6 +40,7 @@ export const useGameStore = create<GameState>()(
       vehicleId: DEFAULT_VEHICLE_ID,
       siteId: DEFAULT_LAUNCH_SITE_ID,
       cameraMode: 'chase',
+      startMode: 'pad',
       quality: 'high',
       selectVehicle: (id) => {
         if (findVehicle(id)) set({ vehicleId: id });
@@ -45,6 +51,7 @@ export const useGameStore = create<GameState>()(
       enterFlight: () => set({ screen: 'flight', cameraMode: 'chase' }),
       returnToMenu: () => set({ screen: 'menu' }),
       setCameraMode: (cameraMode) => set({ cameraMode }),
+      setStartMode: (startMode) => set({ startMode }),
       setQuality: (quality) => set({ quality }),
     }),
     {

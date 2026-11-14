@@ -4,6 +4,7 @@ import { Matrix4, type PerspectiveCamera, Vector3 } from 'three';
 import { EARTH } from '@/game/physics/constants';
 import { enuBasisAt } from '@/game/physics/frames/frames';
 import { type Vec3, add, distance, dot, length, normalize, sub } from '@/game/physics/math/vec3';
+import { elementsFromState } from '@/game/physics/orbital/elements';
 import { useGameStore } from '@/stores/gameStore';
 import { simRuntime } from '@/stores/simRuntime';
 import { FRAME_PRIORITY, frameState } from '../core/frameState';
@@ -17,6 +18,7 @@ import {
   clampParams,
   computeCameraPose,
   easeInOut,
+  fitMapView,
   horizonDirection,
   inertialAnglesFromDirection,
 } from './cameraMath';
@@ -33,6 +35,8 @@ const MENU_SPIN_RATE = 0.012; // rad / s
 const MENU_FRAMING_OFFSET = 0.42;
 /** 近景飞行视角下画面主点的竖直位置（NDC）：把火箭显示在画面中上部，下方留给导航球。 */
 const FLIGHT_PRINCIPAL_OFFSET_Y = 0.3;
+/** 轨道地图：地球同样上移，使整条轨道落在导航球上方。 */
+const MAP_PRINCIPAL_OFFSET_Y = 0.3;
 
 const baseMode = (mode: RigMode): CameraModeId => (mode === 'menu' ? 'orbit' : mode);
 
@@ -50,6 +54,8 @@ const initialParams = (height: number, site: Vec3, focus: Vec3): Record<RigMode,
     free: { ...free, distance: height * 2.3 },
     pad: { azimuth: 196 * DEG, elevation: 1.1 * DEG, distance: Math.max(160, height * 4.2) },
     orbit: { azimuth: siteLongitude + 0.3, elevation: siteLatitude + 0.12, distance: EARTH.RADIUS * 3.1 },
+    // 进入地图时会按当前轨道重新取景，这里只是占位初值
+    map: { azimuth: siteLongitude + 0.3, elevation: 0.9, distance: EARTH.RADIUS * 3.1 },
     menu: { azimuth: siteLongitude + 0.55, elevation: Math.max(siteLatitude, 0.1) + 0.1, distance: EARTH.RADIUS * 3.4 },
   };
 };
@@ -140,7 +146,9 @@ export function CameraRig() {
     // 换了飞行器或发射场：重置机位参数，并直接切到新位置（不做过渡）。
     // （同一配置下重新开始模拟不算，以免打断正在进行的镜头过渡。）
     const config = simRuntime.config;
-    const key = config ? `${config.vehicle.id}|${config.site.latitude}|${config.site.longitude}` : null;
+    const key = config
+      ? `${config.vehicle.id}|${config.site.latitude}|${config.site.longitude}|${config.initialState ? 'orbit' : 'pad'}`
+      : null;
     if (paramsKey.current !== key) {
       paramsKey.current = key;
       params.current = initialParams(frameState.vehicleHeight, frameState.sitePosition, focus);
@@ -163,6 +171,11 @@ export function CameraRig() {
     });
 
     if (wanted !== mode.current) {
+      if (wanted === 'map') {
+        // 每次进入轨道地图都按当前轨道重新取景
+        const elements = elementsFromState(frameState.vehiclePosition, frameState.vehicleVelocity);
+        allParams.map = fitMapView(frameState.vehiclePosition, frameState.vehicleVelocity, elements.apoapsisRadius);
+      }
       const from = lastPose.current;
       const to = computeCameraPose(baseMode(wanted), allParams[wanted], ctxFor(wanted));
       if (from) {
@@ -226,7 +239,8 @@ export function CameraRig() {
     }
     // 主点偏移：近景视角上移，轨道/菜单视角居中；切换时平滑过渡。
     // 透视投影矩阵的 [1][2] 元素为 (top + bottom)/(top − bottom)，设为 −s 即把正前方投影到 NDC y = s。
-    const wantedOffset = mode.current === 'menu' || mode.current === 'orbit' ? 0 : FLIGHT_PRINCIPAL_OFFSET_Y;
+    const wantedOffset =
+      mode.current === 'menu' || mode.current === 'orbit' ? 0 : mode.current === 'map' ? MAP_PRINCIPAL_OFFSET_Y : FLIGHT_PRINCIPAL_OFFSET_Y;
     principalOffset.current += (wantedOffset - principalOffset.current) * Math.min(1, delta * 3);
     if (Math.abs(wantedOffset - principalOffset.current) < 1e-4) principalOffset.current = wantedOffset;
     if (camera.projectionMatrix.elements[9] !== -principalOffset.current) {
@@ -239,7 +253,14 @@ export function CameraRig() {
     frameState.cameraAltitude = cameraAltitude;
     frameState.cameraDistance = cameraDistance;
     frameState.pixelAngle = (2 * tanHalfFovY) / Math.max(1, gl.domElement.height);
+    frameState.pixelRatio = gl.getPixelRatio();
     frameState.principalOffsetY = principalOffset.current;
+    frameState.cameraNear = near;
+    frameState.cameraFar = far;
+    // 轨道地图渐显：进入地图模式且相机已经拉到高空后才开始（近地面时行星深度会与地面补丁冲突）
+    const mapTarget = mode.current === 'map' && cameraAltitude > 150_000 ? 1 : 0;
+    const mapStep = Math.min(1, delta * 2.5);
+    frameState.mapVisibility += Math.sign(mapTarget - frameState.mapVisibility) * Math.min(mapStep, Math.abs(mapTarget - frameState.mapVisibility));
   }, FRAME_PRIORITY.CAMERA);
 
   return null;

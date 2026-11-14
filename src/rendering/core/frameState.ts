@@ -48,11 +48,21 @@ export interface FrameState {
   cameraDistance: number;
   /** 每像素对应的视角 [rad]（竖直方向）。 */
   pixelAngle: number;
+  /** 绘图缓冲的像素比（设备像素 / CSS 像素）。屏幕尺寸恒定的标记按 CSS 像素定大小时使用。 */
+  pixelRatio: number;
   /**
    * 画面主点的竖直偏移（NDC，向上为正）：相机正前方投影到屏幕上的位置。
    * 飞行界面把主点上移，给下方的导航球让出空间。
    */
   principalOffsetY: number;
+  /** 相机近、远裁剪面距离 [m]。 */
+  cameraNear: number;
+  cameraFar: number;
+  /**
+   * 轨道地图的显现程度 0–1（切换视角时渐变）。大于 0 时绘制轨道曲线与标记，
+   * 行星着色器同时输出深度，使轨道在地球背面的部分被正确遮挡。
+   */
+  mapVisibility: number;
 }
 
 export const frameState: FrameState = {
@@ -74,7 +84,11 @@ export const frameState: FrameState = {
   cameraAltitude: 13_629_000,
   cameraDistance: 13_629_000,
   pixelAngle: 0.001,
+  pixelRatio: 1,
   principalOffsetY: 0,
+  cameraNear: 1,
+  cameraFar: 1e7,
+  mapVisibility: 0,
 };
 
 /** 渲染回调的执行顺序（useFrame 优先级；负数先执行且不接管渲染循环）。 */

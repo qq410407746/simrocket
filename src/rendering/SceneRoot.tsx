@@ -9,6 +9,7 @@ import { FrameDriver } from './core/FrameDriver';
 import { PerfProbe } from './core/PerfProbe';
 import { Planet } from './earth/Planet';
 import { LaunchSite } from './launchpad/LaunchSite';
+import { OrbitMap } from './orbital-map/OrbitMap';
 import { VehicleMarker } from './rockets/VehicleMarker';
 import { VehicleAssembly } from './rockets/VehicleAssembly';
 import { SceneLighting } from './sky/SceneLighting';
@@ -50,6 +51,7 @@ export function SceneRoot() {
         <VehicleAssembly vehicle={vehicle} />
         <VehicleMarker />
       </Suspense>
+      <OrbitMap />
       <PerfProbe />
     </Canvas>
   );

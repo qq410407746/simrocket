@@ -5,6 +5,7 @@
  * 可结构化克隆；主线程只读快照，永远不直接修改物理状态。
  */
 import type { AttitudeInput } from '../physics/attitude/attitude';
+import type { AttitudeMode } from '../physics/attitude/pointing';
 import type { Geodetic } from '../physics/frames/frames';
 import type { Quat } from '../physics/math/quat';
 import type { Vec3 } from '../physics/math/vec3';
@@ -36,6 +37,8 @@ export interface InitialFlightState {
   readonly attitude?: Quat;
   /** 已经分离的推进级数量（自下而上）；缺省为 0。 */
   readonly separatedStages?: number;
+  /** 各推进级的推进剂质量 [kg]（与 definition.stages 对应）；缺省为满载。 */
+  readonly stagePropellant?: readonly number[];
   /** 整流罩是否已抛掉；缺省为否。 */
   readonly fairingJettisoned?: boolean;
 }
@@ -99,6 +102,35 @@ export interface DebrisState {
   readonly propellantMass: number;
 }
 
+/**
+ * 轨迹预测：假设从现在起发动机关机、姿态保持不变，飞行器在引力与大气阻力作用下的未来轨迹。
+ * 由物理线程在状态的副本上数值传播得到，不影响真实状态。
+ * 只在轨道会进入大气层（近地点低于 PREDICTION_PERIAPSIS_LIMIT）时计算；稳定轨道直接用解析圆锥曲线表示。
+ */
+export interface TrajectoryPrediction {
+  /** 计算时的模拟时间 [s]。 */
+  readonly computedAt: number;
+  /** 各采样点的模拟时间 [s]，递增。 */
+  readonly times: readonly number[];
+  /** 各采样点的位置 [m]（ECI），按 x, y, z 依次排列。 */
+  readonly points: readonly number[];
+  /** 预测的触地点；预测时段内没有触地时为 null。 */
+  readonly impact: PredictedImpact | null;
+}
+
+export interface PredictedImpact {
+  /** 触地时的模拟时间 [s]。 */
+  readonly time: number;
+  /** 落点纬度、经度 [rad]（已计入这段时间内的地球自转）。 */
+  readonly latitude: number;
+  readonly longitude: number;
+  /** 触地时相对地面的速度 [m/s]。 */
+  readonly speed: number;
+}
+
+/** 近地点高度低于该值 [m] 时进行数值轨迹预测。 */
+export const PREDICTION_PERIAPSIS_LIMIT = 150_000;
+
 /** 飞行过程中的离散事件（用于界面上的事件记录）。 */
 export type FlightEventKind =
   | 'ignition'
@@ -154,6 +186,8 @@ export type SimCommand =
   | { readonly type: 'setThrottle'; readonly throttle: number }
   /** 姿态操纵输入，各分量 [−1, 1]。 */
   | { readonly type: 'setAttitudeInput'; readonly input: AttitudeInput }
+  /** 自动指向模式。 */
+  | { readonly type: 'setAttitudeMode'; readonly mode: AttitudeMode }
   /** 执行飞行序列的下一步：点火 → 逐级分离并点燃下一级 → 载荷发动机点火。 */
   | { readonly type: 'stage' }
   | { readonly type: 'jettisonFairing' }
@@ -170,4 +204,6 @@ export type SimEvent =
     }
   | { readonly type: 'snapshot'; readonly snapshot: SimSnapshot }
   | { readonly type: 'flightEvents'; readonly events: readonly FlightEvent[] }
+  /** 轨迹预测（约 2 Hz）；不适用时为 null。 */
+  | { readonly type: 'prediction'; readonly prediction: TrajectoryPrediction | null }
   | { readonly type: 'error'; readonly message: string };

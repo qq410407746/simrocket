@@ -36,6 +36,8 @@ uniform float uTanHalfFov;
 uniform float uAspect;
 uniform float uPixelAngle;      // 每像素对应的视角 [rad]
 uniform float uPrincipalOffsetY; // 画面主点的竖直偏移（NDC）：相机正前方投影到屏幕上的位置
+uniform float uNear;            // 相机近、远裁剪面 [m]，用于输出与网格对象一致的深度
+uniform float uFar;
 
 uniform vec3 uCamPos;           // 相机相对地心的位置 [km]
 uniform float uCSurf;           // |cam|² − R_地表² [km²]（CPU 双精度计算）
@@ -214,6 +216,16 @@ void main() {
     radiance = inscatter + viewT * uSunIntensity * (disc * 40.0 + glare * 4.0);
     alpha = 1.0 - dot(viewT, vec3(1.0 / 3.0));
   }
+
+  // 深度：地表像素输出与透视投影一致的深度值，供轨道地图中的轨道曲线做遮挡测试
+  // （只有在轨道地图模式下材质才开启深度写入）。非地表像素位于远裁剪面。
+  float depth = 1.0;
+  if (hitSurface) {
+    float viewZ = max(tSurface * 1000.0 * dot(d, uCamFwd), uNear);
+    float ndcZ = (uFar + uNear) / (uFar - uNear) - (2.0 * uFar * uNear) / ((uFar - uNear) * viewZ);
+    depth = clamp(0.5 * ndcZ + 0.5, 0.0, 1.0);
+  }
+  gl_FragDepth = depth;
 
   gl_FragColor = vec4(tonemap(radiance), alpha);
   #include <colorspace_fragment>

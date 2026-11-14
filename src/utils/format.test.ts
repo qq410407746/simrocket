@@ -3,6 +3,8 @@ import { DEG2RAD } from '@/game/physics/constants';
 import { julianDateFromUnixMs } from '@/game/physics/ephemeris/time';
 import {
   formatAngle,
+  formatApsis,
+  formatCountdown,
   formatDistance,
   formatDuration,
   formatForce,
@@ -61,6 +63,20 @@ describe('显示格式化', () => {
     expect(formatPressure(NaN).value).toBe('—');
     expect(formatMissionTime(null)).toBe('T− 00:00:00');
     expect(formatMissionTime(152.6)).toBe('T+ 00:02:32');
+  });
+
+  it('倒计时与拱点高度', () => {
+    expect(formatCountdown(12.4)).toBe('12 s');
+    expect(formatCountdown(185)).toBe('3 m 05 s');
+    expect(formatCountdown(5_230)).toBe('1 h 27 m');
+    expect(formatCountdown(183_600)).toBe('2 d 03 h');
+    expect(formatCountdown(null)).toBe('—');
+    expect(formatCountdown(NaN)).toBe('—');
+    expect(formatApsis(202_812)).toEqual({ value: '202.8', unit: 'km' });
+    expect(formatApsis(-6_099_000)).toEqual({ value: '-6,099.0', unit: 'km' });
+    expect(formatApsis(35_786_000)).toEqual({ value: '35,786', unit: 'km' });
+    expect(formatApsis(Infinity).value).toBe('∞');
+    expect(formatApsis(NaN).value).toBe('—');
   });
 
   it('无效数值显示为占位符而不是 NaN', () => {

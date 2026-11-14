@@ -18,6 +18,8 @@ export const FLIGHT_KEY_HINTS: readonly (readonly [string, string])[] = [
   ['Z', '满推力'],
   ['X', '关机'],
   ['F', '抛整流罩'],
+  ['R T', '顺行 / 逆行保持'],
+  ['M', '轨道地图'],
 ];
 
 /**
@@ -29,7 +31,9 @@ export const FLIGHT_KEY_HINTS: readonly (readonly [string, string])[] = [
  *   Q / E     滚转
  *   ↑ / ↓     增大 / 减小节流；Z 满推力；X 关机
  *   F         抛整流罩
- *   P         暂停；, 与 . 调整时间倍率；1–4 / C 切换视角
+ *   R / T     顺行 / 逆行保持（再按一次回到手动）
+ *   M         轨道地图（再按一次回到跟随视角）
+ *   P         暂停；, 与 . 调整时间倍率；1–5 / C 切换视角
  *
  * 姿态键是"按住生效"的：按键状态变化时把当前输入发给物理线程，松开后火箭保持姿态。
  */
@@ -126,10 +130,22 @@ export const useFlightControls = (): void => {
         case 'Period':
           if (!e.repeat) setWarp(1);
           break;
+        case 'KeyR':
+        case 'KeyT': {
+          if (e.repeat) break;
+          const mode = e.code === 'KeyR' ? 'prograde' : 'retrograde';
+          const current = useSimStore.getState().telemetry?.attitudeMode;
+          simRuntime.setAttitudeMode(current === mode ? 'manual' : mode);
+          break;
+        }
+        case 'KeyM':
+          if (!e.repeat) game.setCameraMode(game.cameraMode === 'map' ? 'chase' : 'map');
+          break;
         case 'Digit1':
         case 'Digit2':
         case 'Digit3':
-        case 'Digit4': {
+        case 'Digit4':
+        case 'Digit5': {
           const mode = CAMERA_MODES[Number(e.code.slice(-1)) - 1];
           if (mode && !e.repeat) game.setCameraMode(mode);
           break;

@@ -12,6 +12,7 @@ const CAMERA_LABEL: Record<CameraMode, { text: string; hint: string }> = {
   free: { text: '自由', hint: '环绕火箭自由旋转，画面以惯性空间为基准（快捷键 2）' },
   pad: { text: '发射台', hint: '发射场地面跟踪机位（快捷键 3）' },
   orbit: { text: '轨道', hint: '环绕地球的远景视角（快捷键 4）' },
+  map: { text: '地图', hint: '轨道地图：当前轨道、预测轨迹、远/近地点（快捷键 M 或 5）' },
 };
 
 /** 时间控制：暂停与时间倍率。超过当前物理状态允许上限的档位不可选。 */
@@ -82,6 +83,9 @@ const stageAction = (t: Telemetry | null, vehicle: VehicleDefinition): StageActi
   }
   if (t.phase !== 'flight') return { label: '飞行结束', hint: '', enabled: false, tone: 'normal' };
   const stage = vehicle.stages[t.activeStageIndex];
+  if (stage && !t.ignited && (t.stagePropellant[t.activeStageIndex] ?? 0) > 0) {
+    return { label: `启动${stage.name}`, hint: `启用${stage.name}发动机（空格）；推力大小由节流阀决定`, enabled: true, tone: 'go' };
+  }
   if (stage) {
     const next = vehicle.stages[t.activeStageIndex + 1];
     return {
@@ -91,7 +95,7 @@ const stageAction = (t: Telemetry | null, vehicle: VehicleDefinition): StageActi
       tone: (t.stagePropellant[t.activeStageIndex] ?? 0) <= 0 ? 'go' : 'normal',
     };
   }
-  if (vehicle.payload.engine && !t.ignited) {
+  if (vehicle.payload.engine && !t.ignited && t.payloadPropellant > 0) {
     return { label: '飞船点火', hint: '启用飞船自带的轨道机动发动机（空格）', enabled: true, tone: 'normal' };
   }
   return { label: '无后续分级', hint: '', enabled: false, tone: 'normal' };
@@ -169,9 +173,6 @@ function CameraControls() {
           {CAMERA_LABEL[mode].text}
         </HudButton>
       ))}
-      <HudButton disabled title="轨道地图——阶段三实现">
-        地图
-      </HudButton>
     </div>
   );
 }

@@ -97,3 +97,21 @@ export const formatPressure = (pascal: number): Formatted => {
 /** 任务时间："T+ 00:02:32"；尚未起飞时为 "T− 00:00:00"。 */
 export const formatMissionTime = (seconds: number | null): string =>
   seconds === null ? 'T− 00:00:00' : `T+ ${formatDuration(seconds)}`;
+
+/** 倒计时/时长的紧凑写法："12 s"、"3 m 05 s"、"1 h 27 m"、"2 d 03 h"。 */
+export const formatCountdown = (seconds: number | null): string => {
+  if (seconds === null || !Number.isFinite(seconds)) return PLACEHOLDER;
+  const s = Math.max(0, Math.round(seconds));
+  if (s < 60) return `${s} s`;
+  if (s < 3600) return `${Math.floor(s / 60)} m ${pad2(s % 60)} s`;
+  if (s < 86_400) return `${Math.floor(s / 3600)} h ${pad2((s % 3600) / 60)} m`;
+  return `${Math.floor(s / 86_400)} d ${pad2((s % 86_400) / 3600)} h`;
+};
+
+/** 高度（可为负或无穷）：近地点在地面以下时显示负值，开放轨道的远地点显示 "∞"。 */
+export const formatApsis = (metres: number): Formatted => {
+  if (metres === Infinity) return { value: '∞', unit: 'km' };
+  if (!Number.isFinite(metres)) return { value: PLACEHOLDER, unit: 'km' };
+  const km = metres / 1000;
+  return { value: fixed(km, Math.abs(km) < 10_000 ? 1 : 0), unit: 'km' };
+};

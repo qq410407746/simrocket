@@ -2,6 +2,7 @@ import { useFrame, useThree } from '@react-three/fiber';
 import { useMemo } from 'react';
 import {
   AddEquation,
+  AlwaysDepth,
   BufferGeometry,
   CustomBlending,
   Float32BufferAttribute,
@@ -64,6 +65,8 @@ export function Planet() {
           uAspect: { value: 1 },
           uPixelAngle: { value: 0.001 },
           uPrincipalOffsetY: { value: 0 },
+          uNear: { value: 1 },
+          uFar: { value: 1e7 },
           uCamPos: { value: new Vector3(20_000, 0, 0) },
           uCSurf: { value: 1 },
           uCCloud: { value: 1 },
@@ -94,7 +97,10 @@ export function Planet() {
         blendEquation: AddEquation,
         blendSrc: OneFactor,
         blendDst: OneMinusSrcAlphaFactor,
-        depthTest: false,
+        // 深度测试恒通过；深度写入只在轨道地图模式下开启（见 useFrame）。
+        // （WebGL 中关闭深度测试时不会写深度，所以用"恒通过"而不是关闭。）
+        depthTest: true,
+        depthFunc: AlwaysDepth,
         depthWrite: false,
       }),
     [textures, quality],
@@ -113,6 +119,9 @@ export function Planet() {
     u.uAspect!.value = camera.aspect;
     u.uPixelAngle!.value = frameState.pixelAngle;
     u.uPrincipalOffsetY!.value = frameState.principalOffsetY;
+    u.uNear!.value = frameState.cameraNear;
+    u.uFar!.value = frameState.cameraFar;
+    material.depthWrite = frameState.mapVisibility > 0;
 
     eciToRender(cam, u.uCamPos!.value as Vector3).multiplyScalar(1e-3);
     u.uCSurf!.value = sphereC(r, R_SURFACE);

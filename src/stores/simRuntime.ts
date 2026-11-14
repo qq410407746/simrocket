@@ -9,12 +9,21 @@
 import type { LaunchSite } from '@/data/launchSites';
 import { launchSiteGeodetic } from '@/data/launchSites';
 import type { AttitudeInput } from '@/game/physics/attitude/attitude';
+import type { AttitudeMode } from '@/game/physics/attitude/pointing';
 import { DEG2RAD } from '@/game/physics/constants';
 import { julianDateForLocalSolarTime } from '@/game/physics/ephemeris/time';
 import { RenderClock, SnapshotBuffer } from '@/game/simulation/interpolation';
-import type { SimEvent, SimSnapshot, SimulationConfig, TimeWarp } from '@/game/simulation/types';
+import { canStartInOrbit, orbitStartState } from '@/game/simulation/startConditions';
+import type {
+  SimEvent,
+  SimSnapshot,
+  SimulationConfig,
+  TimeWarp,
+  TrajectoryPrediction,
+} from '@/game/simulation/types';
 import { deriveTelemetry } from '@/game/telemetry/telemetry';
 import type { VehicleDefinition } from '@/game/vehicles/types';
+import type { StartMode } from './gameStore';
 import { SimulationClient } from '@/workers/SimulationClient';
 import { EVENT_LOG_LIMIT, INITIAL_SIM_STATE, useSimStore } from './simStore';
 
@@ -25,22 +34,28 @@ const TELEMETRY_INTERVAL_MS = 100;
 const DEFAULT_LAUNCH_DATE = { year: 2026, month: 4, day: 12 } as const;
 const DEFAULT_LOCAL_SOLAR_HOURS = 9.5;
 
-export const createSimulationConfig = (vehicle: VehicleDefinition, site: LaunchSite): SimulationConfig => ({
-  vehicle,
-  site: launchSiteGeodetic(site),
-  epochJulianDate: julianDateForLocalSolarTime(
+export const createSimulationConfig = (vehicle: VehicleDefinition, site: LaunchSite, start: StartMode = 'pad'): SimulationConfig => {
+  const epochJulianDate = julianDateForLocalSolarTime(
     DEFAULT_LAUNCH_DATE.year,
     DEFAULT_LAUNCH_DATE.month,
     DEFAULT_LAUNCH_DATE.day,
     DEFAULT_LOCAL_SOLAR_HOURS,
     site.longitudeDeg * DEG2RAD,
-  ),
-});
+  );
+  const geodetic = launchSiteGeodetic(site);
+  return {
+    vehicle,
+    site: geodetic,
+    epochJulianDate,
+    initialState: start === 'orbit' && canStartInOrbit(vehicle) ? orbitStartState(vehicle, geodetic, epochJulianDate) : undefined,
+  };
+};
 
 /** 界面需要立即（而不是等到下一个 100 ms 周期）反映的离散状态。 */
 const discreteStateKey = (s: SimSnapshot): string =>
   `${s.paused}|${s.timeWarp}|${s.maxTimeWarp}|${s.vehicle.phase}|${s.vehicle.ignited}|${s.vehicle.activeStageIndex}|` +
-  `${s.vehicle.fairingAttached}|${s.vehicle.throttle.toFixed(3)}|${s.liftoffTime !== null}|${s.outcome !== null}`;
+  `${s.vehicle.fairingAttached}|${s.vehicle.throttle.toFixed(3)}|${s.vehicle.attitudeMode}|` +
+  `${s.liftoffTime !== null}|${s.outcome !== null}`;
 
 class SimRuntime {
   /** 渲染层每帧读取的快照缓冲（非响应式）。 */
@@ -50,6 +65,8 @@ class SimRuntime {
   config: SimulationConfig | null = null;
   /** 历元时刻地球自转角 [rad]（由模拟器在 ready 事件中给出）。 */
   earthAngleAtEpoch = 0;
+  /** 最新的轨迹预测（非响应式，轨道地图每帧读取）；不适用时为 null。 */
+  prediction: TrajectoryPrediction | null = null;
 
   private client: SimulationClient | null = null;
   private lastTelemetryMs = -Infinity;
@@ -59,6 +76,7 @@ class SimRuntime {
   start(config: SimulationConfig): void {
     if (!this.client) this.client = new SimulationClient(this.handleEvent);
     this.config = config;
+    this.prediction = null;
     this.snapshots.clear();
     this.renderClock.reset();
     this.lastTelemetryMs = -Infinity;
@@ -94,6 +112,11 @@ class SimRuntime {
     this.client?.send({ type: 'setAttitudeInput', input });
   }
 
+  /** 自动指向模式（手动 / 顺行 / 逆行 / 法向 / 径向）。 */
+  setAttitudeMode(mode: AttitudeMode): void {
+    this.client?.send({ type: 'setAttitudeMode', mode });
+  }
+
   /** 飞行序列的下一步：点火 / 分级 / 载荷发动机点火。 */
   stage(): void {
     this.client?.send({ type: 'stage' });
@@ -107,6 +130,7 @@ class SimRuntime {
     this.client?.dispose();
     this.client = null;
     this.config = null;
+    this.prediction = null;
     this.snapshots.clear();
     useSimStore.setState({ ...INITIAL_SIM_STATE });
   }
@@ -139,6 +163,12 @@ class SimRuntime {
             outcome: snapshot.outcome,
           });
         }
+        break;
+      }
+      case 'prediction': {
+        this.prediction = event.prediction;
+        const impact = event.prediction?.impact ?? null;
+        if (impact !== useSimStore.getState().predictedImpact) useSimStore.setState({ predictedImpact: impact });
         break;
       }
       case 'flightEvents': {

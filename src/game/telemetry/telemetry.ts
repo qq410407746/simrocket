@@ -2,7 +2,8 @@
  * 遥测量推导：把原始物理状态换算成仪表显示用的物理量（仍为 SI 单位）。
  * 纯函数，UI 层只做单位换算与格式化。
  */
-import { EARTH, STANDARD_GRAVITY } from '../physics/constants';
+import type { AttitudeMode } from '../physics/attitude/pointing';
+import { EARTH, KARMAN_LINE_ALTITUDE, STANDARD_GRAVITY } from '../physics/constants';
 import {
   airRelativeVelocityEci,
   altitudeOf,
@@ -13,10 +14,73 @@ import {
   pointingAngles,
 } from '../physics/frames/frames';
 import { gravityMagnitude } from '../physics/gravity/pointMass';
-import { angleBetween, dot, length } from '../physics/math/vec3';
+import { type Vec3, angleBetween, dot, length } from '../physics/math/vec3';
+import { type ConicKind, elementsFromState, timeToApoapsis, timeToPeriapsis } from '../physics/orbital/elements';
 import type { SimSnapshot, SimulationConfig } from '../simulation/types';
 import { remainingDeltaV } from '../vehicles/configuration';
 import type { FlightPhase } from '../vehicles/types';
+
+/**
+ * 轨道的定性分类（按密切轨道的近地点高度）：
+ *  - suborbital   近地点在地面以下：轨迹会撞上地面
+ *  - atmospheric  近地点在地面与卡门线之间：会进入稠密大气，无法维持
+ *  - orbit        近地点高于卡门线（100 km）。低于约 160 km 时阻力仍然明显，轨道会在数圈到数天内衰减
+ *  - escape       抛物线或双曲线：不再返回
+ */
+export type OrbitClass = 'suborbital' | 'atmospheric' | 'orbit' | 'escape';
+
+/** 当前状态对应的密切轨道（忽略推力与阻力时飞行器将沿之运动的二体轨道）。 */
+export interface OrbitTelemetry {
+  readonly kind: ConicKind;
+  readonly classification: OrbitClass;
+  /** 远地点高度 [m]；开放轨道为 Infinity。 */
+  readonly apoapsisAltitude: number;
+  /** 近地点高度 [m]（可为负：近地点在地面以下）。 */
+  readonly periapsisAltitude: number;
+  readonly eccentricity: number;
+  /** 轨道倾角 [rad]。 */
+  readonly inclination: number;
+  /** 轨道周期 [s]；开放轨道为 Infinity。 */
+  readonly period: number;
+  /** 半长轴 [m]。 */
+  readonly semiMajorAxis: number;
+  /** 升交点赤经 Ω、近地点幅角 ω、真近点角 ν [rad]，范围 [0, 2π)。奇异情形的约定见 orbital/elements.ts。 */
+  readonly raan: number;
+  readonly argumentOfPeriapsis: number;
+  readonly trueAnomaly: number;
+  /** 到下一次远地点 / 近地点的时间 [s]；不存在时为 null。 */
+  readonly timeToApoapsis: number | null;
+  readonly timeToPeriapsis: number | null;
+}
+
+/** 由位置与速度（ECI）计算密切轨道的遥测量。 */
+export const deriveOrbit = (position: Vec3, velocity: Vec3): OrbitTelemetry => {
+  const el = elementsFromState(position, velocity);
+  const periapsisAltitude = el.periapsisRadius - EARTH.RADIUS;
+  const classification: OrbitClass =
+    el.kind !== 'elliptic'
+      ? 'escape'
+      : periapsisAltitude < 0
+        ? 'suborbital'
+        : periapsisAltitude < KARMAN_LINE_ALTITUDE
+          ? 'atmospheric'
+          : 'orbit';
+  return {
+    kind: el.kind,
+    classification,
+    apoapsisAltitude: el.apoapsisRadius - EARTH.RADIUS,
+    periapsisAltitude,
+    eccentricity: el.eccentricity,
+    inclination: el.inclination,
+    period: el.period,
+    semiMajorAxis: el.semiMajorAxis,
+    raan: el.raan,
+    argumentOfPeriapsis: el.argumentOfPeriapsis,
+    trueAnomaly: el.trueAnomaly,
+    timeToApoapsis: timeToApoapsis(el),
+    timeToPeriapsis: timeToPeriapsis(el),
+  };
+};
 
 export interface Telemetry {
   readonly simTime: number;
@@ -77,6 +141,10 @@ export interface Telemetry {
   readonly angleOfAttack: number;
   /** 大气密度 [kg/m³]。 */
   readonly airDensity: number;
+  /** 自动指向模式。 */
+  readonly attitudeMode: AttitudeMode;
+  /** 密切轨道；只在自由飞行中给出，其余阶段为 null。 */
+  readonly orbit: OrbitTelemetry | null;
 }
 
 export const deriveTelemetry = (snapshot: SimSnapshot, config: SimulationConfig): Telemetry => {
@@ -125,5 +193,7 @@ export const deriveTelemetry = (snapshot: SimSnapshot, config: SimulationConfig)
     drag: vehicle.flight.drag,
     angleOfAttack: vehicle.flight.angleOfAttack,
     airDensity: vehicle.flight.airDensity,
+    attitudeMode: vehicle.attitudeMode,
+    orbit: vehicle.phase === 'flight' ? deriveOrbit(position, velocity) : null,
   };
 };

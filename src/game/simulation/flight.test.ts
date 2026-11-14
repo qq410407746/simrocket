@@ -15,11 +15,14 @@ import {
   verticalLaunchAttitude,
 } from '../physics/frames/frames';
 import { rotate } from '../physics/math/quat';
-import { add, addScaled, cross, distance, dot, length, scale, sub, vec3 } from '../physics/math/vec3';
+import { type Vec3 as Vec3Like, add, addScaled, cross, distance, dot, length, scale, sub, vec3 } from '../physics/math/vec3';
+import { deriveOrbit, deriveTelemetry } from '../telemetry/telemetry';
 import { configurationAero, stageAloneMassProperties } from '../vehicles/configuration';
 import { ATTITUDE_CONTROL, LANDING_LIMITS, Simulation, isValidVehicleState } from './Simulation';
 import { SimulationHost } from './SimulationHost';
+import { buildSnapshot } from './snapshot';
 import { AscentPilot, apsides } from './testing/ascentPilot';
+import { type HandFlownOptions, HandFlownPilot } from './testing/handFlownPilot';
 import type { FlightEvent, InitialFlightState, SimEvent, SimSnapshot, SimulationConfig } from './types';
 
 const epochJulianDate = julianDateFromUnixMs(Date.UTC(2026, 3, 12, 14, 52));
@@ -453,6 +456,37 @@ describe('分级', () => {
     expect(apsides(sim).apoapsis).toBeGreaterThan(300_000 + 50_000);
   });
 
+  it('从轨道开始：上面级带着推进剂但尚未启用，分级指令先点火而不是把它抛掉', () => {
+    const sim = new Simulation(
+      configFor('frontier-1', 'cape-canaveral', circularOrbitState(200_000, { separatedStages: 1, stagePropellant: [0, 12_000] })),
+    );
+    const before = sim.getVehicleState();
+    expect(before.activeStageIndex).toBe(1);
+    expect(before.stages[1]!.propellantMass).toBe(12_000);
+    expect(before.ignited).toBe(false);
+    expect(before.throttle).toBe(0);
+    sim.stage();
+    expect(sim.getVehicleState().ignited).toBe(true);
+    expect(sim.getVehicleState().stages[1]!.attached).toBe(true);
+    expect(sim.drainEvents().map((e) => e.kind)).toEqual(['ignition']);
+    // 节流仍为 0：没有推力，直到玩家给油
+    run(sim, 2);
+    expect(sim.getVehicleState().flight.thrust).toBe(0);
+    sim.setThrottle(1);
+    run(sim, 2);
+    expect(sim.getVehicleState().flight.thrust).toBeCloseTo(950e3, -2);
+    // 已启用后再按：分离该级
+    sim.stage();
+    expect(sim.getVehicleState().stages[1]!.attached).toBe(false);
+  });
+
+  it('初始状态可以指定各级推进剂，超出容量的值被钳制', () => {
+    const sim = new Simulation(
+      configFor('frontier-1', 'cape-canaveral', circularOrbitState(300_000, { separatedStages: 1, stagePropellant: [0, 9e9] })),
+    );
+    expect(sim.getVehicleState().stages[1]!.propellantMass).toBe(95_000);
+  });
+
   it('无动力载荷：分级指令在最后一级分离后不点火', () => {
     const sim = new Simulation(configFor('meteor-s'));
     sim.stage();
@@ -738,5 +772,396 @@ describe('完整上升飞行（脚本驾驶，只使用公开的控制指令）'
     const status = new AscentPilot(sim, { targetAltitude: 200_000, kickAngleDeg: 6 }).fly();
     expect(status).toBe('ended');
     expect(sim.flightPhase).toBe('destroyed');
+  });
+});
+
+describe('手动操作流程（粗糙的按键式操纵，只看仪表上的读数）', () => {
+  const flyByHand = (vehicleId: string, options: HandFlownOptions) => {
+    const config = configFor(vehicleId);
+    const sim = new Simulation(config);
+    const pilot = new HandFlownPilot(sim, config, options);
+    const status = pilot.fly();
+    const { position, velocity } = sim.getVehicleState().body;
+    return { sim, pilot, status, orbit: deriveOrbit(position, velocity), hud: pilot.readHud() };
+  };
+
+  it('边疆一号：照着界面提示的流程操作，进入稳定的近地轨道并能一直飞下去', () => {
+    const { sim, pilot, status, orbit, hud } = flyByHand('frontier-1', { targetAltitude: 200_000, kickAngleDeg: 2.5 });
+    expect(status).toBe('orbit');
+    expect(orbit.classification).toBe('orbit');
+    expect(orbit.periapsisAltitude).toBeGreaterThanOrEqual(150_000);
+    expect(orbit.apoapsisAltitude).toBeLessThan(400_000);
+    // 向正东发射：倾角 ≈ 发射场纬度
+    expect(orbit.inclination / DEG2RAD).toBeGreaterThan(28.3);
+    expect(orbit.inclination / DEG2RAD).toBeLessThan(28.7);
+    // 粗糙的手动操纵比闭环制导多花一些推进剂，但余量仍然充足
+    expect(hud.remainingDeltaV).toBeGreaterThan(2_500);
+    expect(hud.activeStageIndex).toBe(1);
+    expect(pilot.maxDynamicPressure).toBeGreaterThan(30_000);
+    expect(pilot.maxDynamicPressure).toBeLessThan(45_000);
+    expect(sim.time).toBeLessThan(500);
+
+    // "稳定"：关机后再飞一整圈，仍在轨道上，近地点没有明显下降
+    run(sim, orbit.period);
+    expect(sim.flightPhase).toBe('flight');
+    const later = sim.getVehicleState().body;
+    const after = deriveOrbit(later.position, later.velocity);
+    expect(after.classification).toBe('orbit');
+    expect(after.periapsisAltitude).toBeGreaterThan(orbit.periapsisAltitude - 3_000);
+    expect(sim.predictTrajectory()).toBeNull();
+  });
+
+  it('对操作误差不敏感：转弯角 1.5°–4°、每 2–8 秒才调整一次俯仰角，都能入轨', () => {
+    const cases: HandFlownOptions[] = [
+      { targetAltitude: 200_000, kickAngleDeg: 1.5 },
+      { targetAltitude: 200_000, kickAngleDeg: 2 },
+      { targetAltitude: 200_000, kickAngleDeg: 3 },
+      { targetAltitude: 200_000, kickAngleDeg: 4 },
+      { targetAltitude: 200_000, kickAngleDeg: 2, decisionInterval: 2 },
+      { targetAltitude: 200_000, kickAngleDeg: 2, decisionInterval: 5 },
+      { targetAltitude: 200_000, kickAngleDeg: 2, decisionInterval: 8 },
+      { targetAltitude: 200_000, kickAngleDeg: 3, pitchStepDeg: 10 },
+    ];
+    for (const options of cases) {
+      const { status, orbit, hud } = flyByHand('frontier-1', options);
+      const label = JSON.stringify(options);
+      expect(status, label).toBe('orbit');
+      expect(orbit.periapsisAltitude, label).toBeGreaterThanOrEqual(150_000);
+      // 操纵越粗糙，轨道越椭圆（远地点偏高），但都是稳定轨道
+      expect(orbit.apoapsisAltitude, label).toBeLessThan(700_000);
+      expect(hud.remainingDeltaV, label).toBeGreaterThan(2_300);
+    }
+  });
+
+  it('天顶三号（起飞推重比 1.23）：同样的流程，转弯要轻一些（约 1°）', () => {
+    const { status, orbit, hud } = flyByHand('zenith-3', { targetAltitude: 200_000, kickAngleDeg: 1 });
+    expect(status).toBe('orbit');
+    expect(orbit.periapsisAltitude).toBeGreaterThanOrEqual(150_000);
+    expect(orbit.apoapsisAltitude).toBeLessThan(400_000);
+    expect(hud.activeStageIndex).toBe(2);
+    expect(hud.fairingAttached).toBe(false);
+    expect(hud.remainingDeltaV).toBeGreaterThan(3_500);
+  });
+
+  it('同一枚火箭转弯过猛（2°）则轨迹过低而坠毁：流程不是"怎么飞都行"', () => {
+    const { status, sim } = flyByHand('zenith-3', { targetAltitude: 200_000, kickAngleDeg: 2 });
+    expect(status).toBe('ended');
+    expect(sim.flightPhase).toBe('destroyed');
+  });
+});
+
+describe('自动指向（模拟器内）', () => {
+  const angleToNose = (sim: Simulation, direction: { x: number; y: number; z: number }): number => {
+    const state = sim.getVehicleState();
+    const nose = rotate(state.body.attitude, vec3(1, 0, 0));
+    return Math.acos(Math.max(-1, Math.min(1, dot(nose, direction) / length(direction)))) / DEG2RAD;
+  };
+  const orbiting = () => new Simulation(configFor('frontier-1', 'cape-canaveral', circularOrbitState(300_000, { separatedStages: 2 })));
+
+  it('顺行保持：从竖直姿态转到速度方向，并在轨道上持续跟踪', () => {
+    const sim = orbiting();
+    expect(angleToNose(sim, sim.getVehicleState().body.velocity)).toBeCloseTo(90, 6);
+    sim.setAttitudeMode('prograde');
+    expect(sim.getVehicleState().attitudeMode).toBe('prograde');
+    run(sim, 40);
+    expect(angleToNose(sim, sim.getVehicleState().body.velocity)).toBeLessThan(0.2);
+    // 半圈之后速度方向转过了 180°，头部仍然对准
+    run(sim, 2_700);
+    expect(angleToNose(sim, sim.getVehicleState().body.velocity)).toBeLessThan(0.2);
+  });
+
+  it('逆行、法向、反法向、径向', () => {
+    const cases = [
+      ['retrograde', (_r: Vec3Like, v: Vec3Like) => scale(v, -1)],
+      ['normal', (r: Vec3Like, v: Vec3Like) => cross(r, v)],
+      ['antinormal', (r: Vec3Like, v: Vec3Like) => cross(v, r)],
+      ['radial-out', (r: Vec3Like, v: Vec3Like) => cross(v, cross(r, v))],
+      ['radial-in', (r: Vec3Like, v: Vec3Like) => cross(cross(r, v), v)],
+    ] as const;
+    for (const [mode, direction] of cases) {
+      const sim = orbiting();
+      sim.setAttitudeMode(mode);
+      run(sim, 60);
+      const { position, velocity } = sim.getVehicleState().body;
+      expect(angleToNose(sim, direction(position, velocity))).toBeLessThan(0.3);
+    }
+  });
+
+  it('上升段低空：顺行保持使迎角趋于零（以相对来流为准）', () => {
+    const sim = new Simulation(configFor('frontier-1'));
+    sim.stage();
+    run(sim, 20);
+    // 快速向东偏转约 20°：头部领先于速度方向，产生明显的迎角
+    sim.setAttitudeInput({ pitch: 0, yaw: 1, roll: 0 });
+    run(sim, 3);
+    sim.setAttitudeInput({ pitch: 0, yaw: 0, roll: 0 });
+    expect(sim.getVehicleState().flight.angleOfAttack / DEG2RAD).toBeGreaterThan(8);
+    sim.setAttitudeMode('prograde');
+    run(sim, 15);
+    expect(sim.getVehicleState().flight.angleOfAttack / DEG2RAD).toBeLessThan(0.5);
+  });
+
+  it('手动输入暂时覆盖自动指向，松开后回到目标方向', () => {
+    const sim = orbiting();
+    sim.setAttitudeMode('prograde');
+    run(sim, 40);
+    sim.setAttitudeInput({ pitch: 1, yaw: 0, roll: 0 });
+    run(sim, 5);
+    expect(angleToNose(sim, sim.getVehicleState().body.velocity)).toBeGreaterThan(20);
+    sim.setAttitudeInput({ pitch: 0, yaw: 0, roll: 0 });
+    run(sim, 40);
+    expect(angleToNose(sim, sim.getVehicleState().body.velocity)).toBeLessThan(0.2);
+    expect(sim.getVehicleState().attitudeMode).toBe('prograde');
+  });
+
+  it('自动指向不限制时间倍率；无效模式被忽略；飞行结束后回到手动', () => {
+    const sim = orbiting();
+    sim.setAttitudeMode('normal');
+    sim.step();
+    expect(sim.maxTimeWarp).toBe(1000);
+    // @ts-expect-error 故意传入无效模式
+    sim.setAttitudeMode('sideways');
+    expect(sim.getVehicleState().attitudeMode).toBe('normal');
+
+    const falling = new Simulation(configFor('meteor-s', 'cape-canaveral', aboveSite('cape-canaveral', 300, vec3(0, 0, -60))));
+    falling.setAttitudeMode('retrograde');
+    runUntil(falling, () => falling.flightPhase !== 'flight', 30);
+    expect(falling.getVehicleState().attitudeMode).toBe('manual');
+  });
+
+  it('圆化机动：在远地点顺行点火把近地点抬到轨道高度（飞船发动机）', () => {
+    // 200 × 400 km 椭圆轨道，从近地点出发
+    const rp = EARTH.RADIUS + 200_000;
+    const a = EARTH.RADIUS + 300_000;
+    const sim = new Simulation(
+      configFor('frontier-1', 'cape-canaveral', {
+        position: vec3(rp, 0, 0),
+        velocity: vec3(0, Math.sqrt(EARTH.MU * (2 / rp - 1 / a)), 0),
+        separatedStages: 2,
+      }),
+    );
+    sim.setAttitudeMode('prograde');
+    // 滑行到远地点前约 60 s
+    const halfPeriod = Math.PI * Math.sqrt(a ** 3 / EARTH.MU);
+    run(sim, halfPeriod - 60);
+    expect(apsides(sim).periapsis).toBeLessThan(205_000);
+    sim.setThrottle(1);
+    sim.stage();
+    expect(runUntil(sim, () => apsides(sim).periapsis > 390_000 || sim.getVehicleState().payloadPropellantMass === 0, sim.time + 600)).toBe(true);
+    sim.setThrottle(0);
+    const orbit = apsides(sim);
+    expect(orbit.periapsis).toBeGreaterThan(390_000);
+    expect(orbit.apoapsis).toBeLessThan(420_000);
+    // 霍曼转移第二次冲量的理论值约 57 m/s，折合约 150 kg 自燃推进剂
+    const used = 1_200 - sim.getVehicleState().payloadPropellantMass;
+    expect(used).toBeGreaterThan(120);
+    expect(used).toBeLessThan(200);
+  });
+});
+
+describe('轨迹预测', () => {
+  it('发射台上与稳定轨道上不做数值预测', () => {
+    expect(new Simulation(configFor('frontier-1')).predictTrajectory()).toBeNull();
+    const orbit = new Simulation(configFor('frontier-1', 'cape-canaveral', circularOrbitState(400_000, { separatedStages: 2 })));
+    expect(orbit.predictTrajectory()).toBeNull();
+  });
+
+  it('弹道飞行：预测的落点与落地时间和实际飞行结果一致', () => {
+    // 流星-S 燃尽后的无动力弹道（含大气阻力的再入）
+    const sim = new Simulation(configFor('meteor-s'));
+    sim.stage();
+    run(sim, 10);
+    sim.setAttitudeInput({ pitch: 0, yaw: 1, roll: 0 });
+    run(sim, 2.5);
+    sim.setAttitudeInput({ pitch: 0, yaw: 0, roll: 0 });
+    runUntil(sim, () => sim.getVehicleState().stages[0]!.propellantMass === 0, 300);
+    run(sim, 5);
+
+    const prediction = sim.predictTrajectory()!;
+    expect(prediction).not.toBeNull();
+    expect(prediction.impact).not.toBeNull();
+    expect(prediction.points.length).toBe(prediction.times.length * 3);
+    expect(prediction.times.length).toBeLessThanOrEqual(400);
+    expect(prediction.times[0]).toBe(sim.time);
+    for (let i = 1; i < prediction.times.length; i++) expect(prediction.times[i]!).toBeGreaterThan(prediction.times[i - 1]!);
+    for (const value of prediction.points) expect(Number.isFinite(value)).toBe(true);
+
+    runUntil(sim, () => sim.flightPhase !== 'flight', 3_000);
+    const actual = sim.flightOutcome!;
+    // 预测步长比真实积分粗得多（0.5–120 s 对比 0.02 s），仍应在数秒、数公里之内
+    expect(Math.abs(prediction.impact!.time - actual.time)).toBeLessThan(3);
+    const kmPerRad = EARTH.RADIUS / 1000;
+    expect(Math.abs(prediction.impact!.latitude - actual.latitude) * kmPerRad).toBeLessThan(3);
+    expect(Math.abs(prediction.impact!.longitude - actual.longitude) * kmPerRad * Math.cos(actual.latitude)).toBeLessThan(3);
+    expect(Math.abs(prediction.impact!.speed - actual.impactSpeed) / actual.impactSpeed).toBeLessThan(0.05);
+  });
+
+  it('预测不改变真实状态：做与不做预测，后续轨迹逐位相同', () => {
+    const make = () => new Simulation(configFor('meteor-s', 'cape-canaveral', aboveSite('cape-canaveral', 80_000, vec3(900, 0, 400))));
+    const a = make();
+    const b = make();
+    for (let i = 0; i < 500; i++) {
+      a.step();
+      b.step();
+      if (i % 25 === 0) {
+        const before = a.getVehicleState();
+        expect(a.predictTrajectory()).not.toBeNull();
+        expect(a.getVehicleState()).toEqual(before);
+      }
+    }
+    expect(a.getVehicleState()).toEqual(b.getVehicleState());
+    expect(a.time).toBe(b.time);
+  });
+
+  it('发动机工作时的预测假设"现在关机"', () => {
+    const sim = new Simulation(configFor('frontier-1'));
+    sim.stage();
+    run(sim, 30);
+    expect(sim.getVehicleState().flight.thrust).toBeGreaterThan(0);
+    const prediction = sim.predictTrajectory()!;
+    expect(prediction.impact).not.toBeNull();
+    // 30 s 时关机：一两分钟内就会落回地面
+    expect(prediction.impact!.time - sim.time).toBeGreaterThan(10);
+    expect(prediction.impact!.time - sim.time).toBeLessThan(200);
+  });
+
+  it('近地点在大气层内的轨道：预测到再入并给出落点；计算耗时在毫秒量级', () => {
+    // 300 km 远地点、60 km 近地点（典型的离轨后轨道），从远地点出发
+    const ra = EARTH.RADIUS + 300_000;
+    const a = EARTH.RADIUS + 180_000;
+    const sim = new Simulation(
+      configFor('frontier-1', 'cape-canaveral', {
+        position: vec3(ra, 0, 0),
+        velocity: vec3(0, Math.sqrt(EARTH.MU * (2 / ra - 1 / a)), 0),
+        separatedStages: 2,
+      }),
+    );
+    const start = performance.now();
+    const prediction = sim.predictTrajectory()!;
+    const elapsed = performance.now() - start;
+    expect(prediction.impact).not.toBeNull();
+    // 约半圈后进入大气层并落地
+    expect(prediction.impact!.time).toBeGreaterThan(1_800);
+    expect(prediction.impact!.time).toBeLessThan(4_500);
+    // 返回舱以终端速度落地（没有降落伞）
+    expect(prediction.impact!.speed).toBeGreaterThan(50);
+    expect(prediction.impact!.speed).toBeLessThan(400);
+    expect(elapsed).toBeLessThan(100);
+  });
+
+  it('逆行保持下的离轨再入：预测按"指向模式不变"计算，落点与实际一致，且不随时间漂移', () => {
+    // 200 km 圆轨道，带着接近空箱的二级：逆行点火约 150 m/s 后关机，保持逆行指向直到落地
+    const base = circularOrbitState(200_000, { separatedStages: 1, stagePropellant: [0, 12_000] });
+    const sim = new Simulation(configFor('frontier-1', 'cape-canaveral', { ...base, attitude: verticalLaunchAttitude(vec3(0, -1, 0)) }));
+    sim.setAttitudeMode('retrograde');
+    sim.setThrottle(1);
+    sim.stage();
+    const v0 = length(sim.getVehicleState().body.velocity);
+    runUntil(sim, () => v0 - length(sim.getVehicleState().body.velocity) > 150, 60);
+    sim.setThrottle(0);
+    run(sim, 1);
+
+    const early = sim.predictTrajectory()!;
+    expect(early.impact).not.toBeNull();
+    // 滑行约 10 分钟后（仍在大气层外）重新预测：两次预测应当指向同一个落点
+    run(sim, 600);
+    expect(length(sim.getVehicleState().body.position) - EARTH.RADIUS).toBeGreaterThan(120_000);
+    const later = sim.predictTrajectory()!;
+    expect(later.impact).not.toBeNull();
+
+    runUntil(sim, () => sim.flightPhase !== 'flight', 6_000);
+    const actual = sim.flightOutcome!;
+    const kmPerRad = EARTH.RADIUS / 1000;
+    const miss = (p: NonNullable<typeof early.impact>) =>
+      Math.hypot((p.latitude - actual.latitude) * kmPerRad, (p.longitude - actual.longitude) * kmPerRad * Math.cos(actual.latitude));
+    // 实测：两次预测与实际落地都相差约 0.02 s、数米（再入中从 7.3 km/s 减速到约 0.3 km/s，峰值约 9 g）。
+    // 若预测仍假设惯性姿态不变，箭体会在再入时横对来流，预测落点将提前十几秒、偏差上百公里。
+    expect(actual.impactSpeed).toBeLessThan(600);
+    expect(Math.abs(early.impact!.time - actual.time)).toBeLessThan(2);
+    expect(miss(early.impact!)).toBeLessThan(5);
+    expect(Math.abs(later.impact!.time - actual.time)).toBeLessThan(2);
+    expect(miss(later.impact!)).toBeLessThan(5);
+  });
+
+  it('主机约每 0.5 s 发布一次预测；轨道变稳定后发一次 null 清除', () => {
+    const events: SimEvent[] = [];
+    let now = 0;
+    const host = new SimulationHost((e) => events.push(e), () => now);
+    host.handle({ type: 'init', config: configFor('meteor-s', 'cape-canaveral', aboveSite('cape-canaveral', 60_000, vec3(500, 0, 300))) });
+    for (let i = 0; i < 500; i++) {
+      now += 4;
+      host.tick();
+    }
+    const predictions = events.filter((e) => e.type === 'prediction');
+    expect(predictions.length).toBeGreaterThanOrEqual(3);
+    expect(predictions.length).toBeLessThanOrEqual(6);
+    expect(predictions.every((e) => e.type === 'prediction' && e.prediction !== null)).toBe(true);
+
+    // 稳定轨道：从不发布预测
+    const quiet: SimEvent[] = [];
+    const host2 = new SimulationHost((e) => quiet.push(e), () => now);
+    host2.handle({ type: 'init', config: configFor('frontier-1', 'cape-canaveral', circularOrbitState(400_000, { separatedStages: 2 })) });
+    for (let i = 0; i < 500; i++) {
+      now += 4;
+      host2.tick();
+    }
+    expect(quiet.some((e) => e.type === 'prediction')).toBe(false);
+  });
+});
+
+describe('轨道遥测', () => {
+  const telemetryOf = (sim: Simulation, config: SimulationConfig) =>
+    deriveTelemetry(buildSnapshot(sim, { seq: 0, timeWarp: 1, paused: false, simRate: 1 }), config);
+
+  it('发射台上不给出轨道参数；起飞后为亚轨道', () => {
+    const config = configFor('frontier-1');
+    const sim = new Simulation(config);
+    expect(telemetryOf(sim, config).orbit).toBeNull();
+    sim.stage();
+    run(sim, 20);
+    const orbit = telemetryOf(sim, config).orbit!;
+    expect(orbit.classification).toBe('suborbital');
+    expect(orbit.periapsisAltitude).toBeLessThan(0);
+    expect(orbit.apoapsisAltitude).toBeGreaterThan(0);
+  });
+
+  it('入轨后：分类为在轨，远/近地点、倾角、周期与轨道一致', () => {
+    const config = configFor('frontier-1');
+    const sim = new Simulation(config);
+    expect(new AscentPilot(sim, { targetAltitude: 200_000, kickAngleDeg: 4 }).fly()).toBe('orbit');
+    const t = telemetryOf(sim, config);
+    const orbit = t.orbit!;
+    const reference = apsides(sim);
+    expect(orbit.classification).toBe('orbit');
+    expect(orbit.periapsisAltitude).toBeCloseTo(reference.periapsis, 3);
+    expect(orbit.apoapsisAltitude).toBeCloseTo(reference.apoapsis, 3);
+    expect(orbit.inclination / DEG2RAD).toBeCloseTo(28.5, 0);
+    expect(orbit.period / 60).toBeGreaterThan(87);
+    expect(orbit.period / 60).toBeLessThan(90);
+    expect(orbit.eccentricity).toBeLessThan(0.005);
+    expect(orbit.timeToApoapsis).not.toBeNull();
+    expect(orbit.timeToPeriapsis).not.toBeNull();
+    expect(t.attitudeMode).toBe('manual');
+    // 其余根数：角度都在 [0, 2π) 内
+    for (const angle of [orbit.raan, orbit.argumentOfPeriapsis, orbit.trueAnomaly]) {
+      expect(angle).toBeGreaterThanOrEqual(0);
+      expect(angle).toBeLessThan(2 * Math.PI);
+    }
+    // 向正东发射时发射场是轨道的最北点（纬度幅角 u = ω + ν = 90°）；入轨时已向东飞出约 14°（约 1500 km）
+    const argumentOfLatitude = ((orbit.argumentOfPeriapsis + orbit.trueAnomaly) / DEG2RAD) % 360;
+    expect(argumentOfLatitude).toBeGreaterThan(98);
+    expect(argumentOfLatitude).toBeLessThan(112);
+    expect(orbit.semiMajorAxis).toBeCloseTo(EARTH.RADIUS + (reference.periapsis + reference.apoapsis) / 2, 3);
+  });
+
+  it('近地点在大气层内、逃逸轨道的分类', () => {
+    const ra = EARTH.RADIUS + 300_000;
+    const low = deriveOrbit(vec3(ra, 0, 0), vec3(0, Math.sqrt(EARTH.MU * (2 / ra - 1 / (EARTH.RADIUS + 180_000))), 0));
+    expect(low.classification).toBe('atmospheric');
+    expect(low.periapsisAltitude / 1000).toBeCloseTo(60, 3);
+    const escape = deriveOrbit(vec3(ra, 0, 0), vec3(0, 11_500, 0));
+    expect(escape.classification).toBe('escape');
+    expect(escape.apoapsisAltitude).toBe(Infinity);
+    expect(escape.timeToApoapsis).toBeNull();
   });
 });

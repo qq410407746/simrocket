@@ -1,9 +1,10 @@
 import { useMemo } from 'react';
 import { LAUNCH_SITES, getLaunchSiteOrDefault } from '@/data/launchSites';
 import { VEHICLE_CATALOG, getVehicleOrDefault } from '@/data/vehicles';
+import { ORBIT_START_ALTITUDE, canStartInOrbit } from '@/game/simulation/startConditions';
 import { analyzeVehicle } from '@/game/vehicles/analysis';
 import type { VehicleDefinition } from '@/game/vehicles/types';
-import { type GraphicsQuality, useGameStore } from '@/stores/gameStore';
+import { type GraphicsQuality, type StartMode, useGameStore } from '@/stores/gameStore';
 import { simRuntime } from '@/stores/simRuntime';
 import { formatMass, formatNumber } from '@/utils/format';
 
@@ -62,20 +63,22 @@ export function MainMenu() {
   const selectSite = useGameStore((s) => s.selectSite);
   const setQuality = useGameStore((s) => s.setQuality);
   const enterFlight = useGameStore((s) => s.enterFlight);
+  const startMode = useGameStore((s) => s.startMode);
+  const setStartMode = useGameStore((s) => s.setStartMode);
 
   const vehicle = getVehicleOrDefault(vehicleId);
   const site = getLaunchSiteOrDefault(siteId);
+  const orbitAvailable = canStartInOrbit(vehicle);
+  const effectiveStart: StartMode = startMode === 'orbit' && orbitAvailable ? 'orbit' : 'pad';
 
   return (
-    <div className="flex h-full items-stretch p-4 sm:p-6" data-testid="main-menu">
-      <div className="panel-frame scroll-thin pointer-events-auto flex w-full max-w-[440px] flex-col gap-3 overflow-y-auto rounded-xl px-5 py-4 backdrop-blur-md">
+    <div className="flex h-full items-stretch p-4 sm:p-5" data-testid="main-menu">
+      <div className="panel-frame scroll-thin pointer-events-auto flex w-full max-w-[440px] flex-col gap-2.5 overflow-y-auto rounded-xl px-5 py-3.5 backdrop-blur-md">
         <header>
           <p className="text-[10px] tracking-[0.3em] text-data-dim">航天飞行模拟 · SPACEFLIGHT SIMULATION</p>
-          <h1 className="mt-1 text-[30px] leading-none font-bold tracking-[0.12em] text-ink">ORBITAL FRONTIER</h1>
-          <p className="mt-1.5 text-[18px] tracking-[0.5em] text-data">轨道边疆</p>
-          <p className="mt-2.5 text-[12px] leading-relaxed text-ink-dim">
-            从地球表面出发，以真实的轨道动力学、空气动力学与热物理为基础，完成发射、入轨与再入返回。
-          </p>
+          <h1 className="mt-1 text-[26px] leading-none font-bold tracking-[0.12em] text-ink">ORBITAL FRONTIER</h1>
+          <p className="mt-1 text-[15px] tracking-[0.5em] text-data">轨道边疆</p>
+          <p className="mt-1.5 text-[11px] leading-relaxed text-ink-dim">以真实的轨道动力学与空气动力学为基础：发射、入轨、轨道机动、再入。</p>
         </header>
 
         <section>
@@ -90,7 +93,7 @@ export function MainMenu() {
 
         <section>
           <h2 className="mb-2 text-[11px] font-semibold tracking-[0.18em] text-ink-faint">选择发射场</h2>
-          <div className="grid grid-cols-3 gap-1.5">
+          <div className="grid grid-cols-3 gap-1">
             {LAUNCH_SITES.map((s) => {
               const selected = s.id === siteId;
               return (
@@ -100,14 +103,14 @@ export function MainMenu() {
                   onClick={() => selectSite(s.id)}
                   aria-pressed={selected}
                   data-testid={`site-${s.id}`}
-                  className={`rounded-md border px-2 py-1.5 text-left transition-colors ${
+                  className={`flex items-baseline justify-between gap-1 rounded-md border px-1.5 py-1.5 text-left transition-colors ${
                     selected ? 'border-data bg-data/10' : 'border-line bg-panel/40 hover:border-data-dim hover:bg-raised/70'
                   }`}
                 >
-                  <div className="text-[12px] text-ink">{s.nameZh}</div>
-                  <div className="readout text-[10px] text-ink-faint">
+                  <span className="text-[12px] whitespace-nowrap text-ink">{s.nameZh}</span>
+                  <span className="readout text-[9.5px] whitespace-nowrap text-ink-faint">
                     {Math.abs(s.latitudeDeg).toFixed(1)}°{s.latitudeDeg >= 0 ? 'N' : 'S'}
-                  </div>
+                  </span>
                 </button>
               );
             })}
@@ -115,6 +118,37 @@ export function MainMenu() {
           <p className="mt-2 text-[11px] leading-relaxed text-ink-dim">
             <span className="text-ink">{site.region}</span> — {site.note}
           </p>
+        </section>
+
+        <section>
+          <h2 className="mb-2 text-[11px] font-semibold tracking-[0.18em] text-ink-faint">出发点</h2>
+          <div className="grid grid-cols-2 gap-1.5">
+            {(
+              [
+                ['pad', '发射台', '从地面发射'],
+                ['orbit', `近地轨道 ${ORBIT_START_ALTITUDE / 1000} km`, orbitAvailable ? '跳过上升段，练习轨道机动' : '该火箭无法入轨'],
+              ] as const
+            ).map(([mode, title, note]) => {
+              const selected = effectiveStart === mode;
+              const disabled = mode === 'orbit' && !orbitAvailable;
+              return (
+                <button
+                  key={mode}
+                  type="button"
+                  disabled={disabled}
+                  onClick={() => setStartMode(mode)}
+                  aria-pressed={selected}
+                  data-testid={`start-${mode}`}
+                  className={`rounded-md border px-2 py-1.5 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-45 ${
+                    selected ? 'border-data bg-data/10' : 'border-line bg-panel/40 hover:border-data-dim hover:bg-raised/70'
+                  }`}
+                >
+                  <div className="text-[12px] text-ink">{title}</div>
+                  <div className="text-[10px] text-ink-faint">{note}</div>
+                </button>
+              );
+            })}
+          </div>
         </section>
 
         <button
@@ -127,7 +161,7 @@ export function MainMenu() {
           data-testid="enter-flight"
           className="rounded-md border border-data bg-data/15 px-4 py-2.5 text-[15px] font-semibold tracking-[0.3em] text-data transition-colors hover:bg-data/25"
         >
-          进入发射台
+          {effectiveStart === 'orbit' ? '进入轨道' : '进入发射台'}
         </button>
 
         <footer className="mt-auto flex flex-col gap-2 border-t border-line/60 pt-3">
@@ -151,7 +185,7 @@ export function MainMenu() {
             </div>
           </div>
           <p className="text-[10px] leading-relaxed text-ink-faint">
-            开发阶段 2 / 7 · 可以点火起飞、分级并尝试入轨。轨道参数显示与轨道地图属于阶段三，降落伞与热防护属于阶段四。
+            开发阶段 3 / 7 · 可以发射、入轨、圆化与离轨，带轨道仪表与轨道地图。降落伞与热防护属于阶段四。
           </p>
         </footer>
       </div>

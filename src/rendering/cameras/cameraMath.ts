@@ -22,7 +22,7 @@ import {
   vec3,
 } from '@/game/physics/math/vec3';
 
-export type CameraModeId = 'chase' | 'free' | 'pad' | 'orbit';
+export type CameraModeId = 'chase' | 'free' | 'pad' | 'orbit' | 'map';
 
 export interface OrbitParams {
   /** 方位角 [rad]。 */
@@ -71,6 +71,13 @@ export const MODE_LIMITS: Record<CameraModeId, ModeLimits> = {
     maxElevation: 88 * DEG,
     minDistance: EARTH.RADIUS * 1.06,
     maxDistance: EARTH.RADIUS * 40,
+  },
+  // 轨道地图：需要能拉远到看全地球同步轨道与逃逸轨迹
+  map: {
+    minElevation: -89 * DEG,
+    maxElevation: 89 * DEG,
+    minDistance: EARTH.RADIUS * 1.3,
+    maxDistance: EARTH.RADIUS * 400,
   },
 };
 
@@ -129,6 +136,11 @@ export const computeCameraPose = (mode: CameraModeId, params: OrbitParams, ctx: 
       const position = clampAboveGround(addScaled(ctx.site, dir, p.distance));
       return { position, target: ctx.focus, up: normalize(position, up) };
     }
+    case 'map': {
+      // 轨道地图：以地心为中心（惯性系，北向上），轨道在惯性空间中保持不动。
+      const dir = directionFrom(p.azimuth, p.elevation, UNIT_X, UNIT_Y, UNIT_Z);
+      return { position: scale(dir, p.distance), target: vec3(0, 0, 0), up: UNIT_Z };
+    }
     case 'orbit': {
       // 以地心为中心的环绕视角（惯性系，北向上）。
       const dir = directionFrom(p.azimuth, p.elevation, UNIT_X, UNIT_Y, UNIT_Z);
@@ -184,6 +196,21 @@ export const blendPoses = (from: CameraPose, to: CameraPose, anchor: Vec3, s: nu
 export const easeInOut = (x: number): number => {
   const t = Math.min(1, Math.max(0, x));
   return t * t * t * (t * (t * 6 - 15) + 10);
+};
+
+/**
+ * 进入轨道地图时的取景：从轨道面的北侧斜向俯视（轨道呈现为张开的椭圆），
+ * 并偏向飞行器所在的一侧；距离按远地点（上限 12 个地球半径）取，使整条轨道落在画面内。
+ */
+export const fitMapView = (position: Vec3, velocity: Vec3, apoapsisRadius: number): OrbitParams => {
+  const h = normalize(cross(position, velocity), UNIT_Z);
+  const northward = h.z >= 0 ? h : scale(h, -1);
+  const outward = normalize(position, UNIT_X);
+  const direction = normalize(add(scale(northward, 0.8), scale(outward, 0.6)), UNIT_Z);
+  const extent = Math.max(EARTH.RADIUS, Math.min(apoapsisRadius, 12 * EARTH.RADIUS));
+  // 竖直视场 45°：距离取 5.4 倍时，近地轨道连同地球约占画面高度的 45%，
+  // 正好落在导航球上方、两侧仪表面板之间的空白区域里（画面主点同时上移，见 CameraRig）
+  return { ...inertialAnglesFromDirection(direction), distance: 5.4 * extent };
 };
 
 /** 当地水平系中由方位角（自北向东）与仰角给出的单位方向（ECI）。 */

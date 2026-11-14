@@ -16,6 +16,7 @@ interface DebugState {
     cameraPosition: Vec3;
     vehiclePosition: Vec3;
     sunDirection: Vec3;
+    mapVisibility: number;
   };
   sim: {
     status: string;
@@ -48,9 +49,20 @@ interface DebugState {
       fairingAttached: boolean;
       stagePropellant: number[];
       stageAttached: boolean[];
+      attitudeMode: string;
+      orbit: null | {
+        classification: string;
+        apoapsisAltitude: number;
+        periapsisAltitude: number;
+        inclination: number;
+        eccentricity: number;
+        period: number;
+        timeToApoapsis: number | null;
+      };
     };
     events: string[];
-    outcome: null | { kind: string; impactSpeed: number };
+    outcome: null | { kind: string; impactSpeed: number; latitude: number; longitude: number; time: number };
+    predictedImpact: null | { time: number; latitude: number; longitude: number; speed: number };
   };
   debrisCount: number;
   fps: number;
@@ -73,6 +85,7 @@ const readState = (page: Page): Promise<DebugState | null> =>
         cameraPosition: frame.cameraPosition,
         vehiclePosition: frame.vehiclePosition,
         sunDirection: frame.sunDirection,
+        mapVisibility: frame.mapVisibility,
       },
       sim: {
         status: sim.status,
@@ -83,7 +96,16 @@ const readState = (page: Page): Promise<DebugState | null> =>
         simRate: sim.simRate,
         telemetry: sim.telemetry,
         events: sim.events.map((e) => e.kind),
-        outcome: sim.outcome ? { kind: sim.outcome.kind, impactSpeed: sim.outcome.impactSpeed } : null,
+        outcome: sim.outcome
+          ? {
+              kind: sim.outcome.kind,
+              impactSpeed: sim.outcome.impactSpeed,
+              latitude: sim.outcome.latitude,
+              longitude: sim.outcome.longitude,
+              time: sim.outcome.time,
+            }
+          : null,
+        predictedImpact: sim.predictedImpact,
       },
       debrisCount: frame.debris.length,
       fps: perf.fps,
@@ -194,8 +216,10 @@ test.describe('Orbital Frontier 冒烟测试', () => {
     await expect(page.getByTestId('navball')).toBeVisible();
     await expect(page.getByTestId('throttle-value')).toHaveText('100%');
     await expect(page.getByTestId('flight-hint')).toContainText('空格');
-    // 尚未实现的仪表仍然标注阶段而不是显示数值
-    await expect(page.getByTestId('telemetry-panel')).toContainText('阶段三');
+    // 尚未实现的仪表标注阶段而不是显示数值；轨道读数在起飞前不给数值
+    await expect(page.getByTestId('telemetry-panel')).toContainText('阶段四');
+    expect(t.orbit).toBeNull();
+    await expect(page.getByTestId('orbit-status')).toHaveCount(0);
   });
 
   test('暂停与恢复', async ({ page }) => {
@@ -247,7 +271,7 @@ test.describe('Orbital Frontier 冒烟测试', () => {
     await expect.poll(async () => (await readState(page))?.sim.timeWarp).toBe(100);
   });
 
-  test('视角切换：四种机位都给出有效且符合预期的相机位置', async ({ page }) => {
+  test('视角切换：各机位都给出有效且符合预期的相机位置', async ({ page }) => {
     await startApp(page);
     await enterFlight(page);
 
@@ -271,6 +295,17 @@ test.describe('Orbital Frontier 冒烟测试', () => {
     // 快捷键 4 → 轨道视角
     await page.keyboard.press('4');
     await expect(page.getByTestId('camera-orbit')).toHaveAttribute('aria-pressed', 'true');
+
+    // 轨道地图：按钮与快捷键 M；相机拉远到地球之外，地图内容淡入
+    await page.getByTestId('camera-map').click();
+    await expect(page.getByTestId('camera-map')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByTestId('map-overlay')).toBeVisible();
+    await expect.poll(async () => (await readState(page))!.frame.mapVisibility, { timeout: 60_000 }).toBe(1);
+    await expect.poll(async () => (await readState(page))!.frame.cameraAltitude, { timeout: 60_000 }).toBeGreaterThan(1e7);
+    await expectAllFinite(page);
+    await page.keyboard.press('m');
+    await expect(page.getByTestId('camera-chase')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByTestId('map-overlay')).toHaveCount(0);
   });
 
   test('常见输入不会产生无效数值：拖拽、极限缩放、连续按键', async ({ page }) => {
@@ -282,7 +317,7 @@ test.describe('Orbital Frontier 冒烟测试', () => {
     const cx = box.x + box.width / 2;
     const cy = box.y + box.height / 2;
 
-    for (const mode of ['chase', 'free', 'pad', 'orbit'] as const) {
+    for (const mode of ['chase', 'free', 'pad', 'orbit', 'map'] as const) {
       await page.getByTestId(`camera-${mode}`).click();
       // 大幅拖拽（含试图把相机拖到地面以下）
       await page.mouse.move(cx, cy);
@@ -301,7 +336,7 @@ test.describe('Orbital Frontier 冒烟测试', () => {
     }
 
     // 连续按键（其中空格会点火起飞，W/A/Q 等会转动火箭——状态都应保持有效）
-    for (const key of ['.', '.', '.', '.', '.', '.', '.', ',', 'p', 'p', 'c', 'c', 'c', '1', '2', '3', '4', ' ', 'w', 'a', 'q', 'z', 'x', 'f', 'ArrowUp', 'ArrowDown', 'Escape', ' ']) {
+    for (const key of ['.', '.', '.', '.', '.', '.', '.', ',', 'p', 'p', 'c', 'c', 'c', '1', '2', '3', '4', '5', 'm', 'm', ' ', 'w', 'a', 'q', 'r', 't', 't', 'z', 'x', 'f', 'ArrowUp', 'ArrowDown', 'Escape', ' ']) {
       await page.keyboard.press(key);
     }
     await page.waitForTimeout(800);
@@ -487,5 +522,208 @@ test.describe('Orbital Frontier 冒烟测试', () => {
     await expect(page.getByTestId('payload-row')).toContainText('整流罩已抛');
     await expect(page.getByTestId('fairing-button')).toBeDisabled();
     await expectAllFinite(page);
+  });
+});
+
+const DEG = 180 / Math.PI;
+
+/** 主菜单选择"从近地轨道出发"并进入飞行。 */
+const enterOrbit = async (page: Page): Promise<void> => {
+  await page.getByTestId('start-orbit').click();
+  await expect(page.getByTestId('start-orbit')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByTestId('enter-flight')).toContainText('进入轨道');
+  await expect.poll(async () => (await readState(page))!.sim.telemetry?.phase ?? null).toBe('flight');
+  await enterFlight(page);
+};
+
+test.describe('轨道动力学（阶段三）', () => {
+  test('从近地轨道出发：轨道读数与理论值一致，滑行一段时间后轨道不变', async ({ page }) => {
+    const problems = await startApp(page);
+    await enterOrbit(page);
+
+    const state = await expectAllFinite(page);
+    const t = state.sim.telemetry!;
+    const orbit = t.orbit!;
+    expect(orbit.classification).toBe('orbit');
+    expect(orbit.apoapsisAltitude / 1000).toBeCloseTo(200, 1);
+    expect(orbit.periapsisAltitude / 1000).toBeCloseTo(200, 1);
+    expect(orbit.eccentricity).toBeLessThan(1e-4);
+    // 向正东入轨：倾角等于发射场纬度
+    expect(orbit.inclination * DEG).toBeCloseTo(28.5, 1);
+    // 200 km 圆轨道：T = 2π√(a³/μ) ≈ 88.4 min，v = √(μ/r) ≈ 7788 m/s
+    expect(orbit.period / 60).toBeCloseTo(88.4, 0);
+    expect(t.inertialSpeed).toBeGreaterThan(7780);
+    expect(t.inertialSpeed).toBeLessThan(7796);
+    expect(t.gLoad).toBeLessThan(0.01);
+    expect(t.activeStageIndex).toBe(1);
+    expect(t.attitudeMode).toBe('manual');
+    expect(state.sim.maxTimeWarp).toBe(1000);
+    expect(state.sim.predictedImpact).toBeNull();
+
+    await expect(page.getByTestId('flight-phase')).toContainText('在轨滑行');
+    await expect(page.getByTestId('orbit-status')).toHaveText('在轨');
+    await expect(page.getByTestId('readout-apoapsis')).toContainText('200.0');
+    await expect(page.getByTestId('readout-periapsis')).toContainText('200.0');
+    await expect(page.getByTestId('readout-inclination')).toHaveText('28.50');
+    await expect(page.getByTestId('stage-button')).toContainText('启动二级');
+
+    // 1000× 滑行约半圈：200 km 高度只有极稀薄的大气，轨道几乎不变，高度始终在 200 km 附近
+    await page.getByTestId('warp-1000').click();
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.simTime, { timeout: 60_000 }).toBeGreaterThan(2_600);
+    await page.getByTestId('warp-1').click();
+    const later = await expectAllFinite(page);
+    const o2 = later.sim.telemetry!.orbit!;
+    expect(o2.classification).toBe('orbit');
+    expect(Math.abs(later.sim.telemetry!.altitude - 200_000)).toBeLessThan(3_000);
+    expect(o2.apoapsisAltitude).toBeGreaterThan(195_000);
+    expect(o2.apoapsisAltitude).toBeLessThan(200_500);
+    expect(o2.inclination * DEG).toBeCloseTo(28.5, 1);
+    const hudText = await page.getByTestId('flight-hud').innerText();
+    expect(hudText).not.toMatch(/NaN|Infinity|undefined/);
+    expect(problems).toEqual([]);
+  });
+
+  test('轨道地图：画出轨道，地图说明与标记可见，画面不是空的', async ({ page }) => {
+    const problems = await startApp(page);
+    await enterOrbit(page);
+    await page.keyboard.press('m');
+    await expect(page.getByTestId('camera-map')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByTestId('map-overlay')).toContainText('当前轨道');
+    await expect.poll(async () => (await readState(page))!.frame.mapVisibility, { timeout: 60_000 }).toBe(1);
+    // 等过渡结束：相机到地心的距离约为轨道半径的 5.4 倍
+    await expect
+      .poll(async () => (await readState(page))!.frame.cameraAltitude, { timeout: 60_000 })
+      .toBeGreaterThan(2.5e7);
+    const state = await expectAllFinite(page);
+    expect(state.frame.cameraAltitude).toBeLessThan(3.5e7);
+    // 稳定轨道：没有预计落点
+    await expect(page.getByTestId('predicted-impact')).toHaveCount(0);
+    await expect(page.getByTestId('no-predicted-impact')).toBeVisible();
+    // 图例里列出六个轨道根数
+    await expect(page.getByTestId('orbital-elements')).toContainText('轨道根数');
+    await expect(page.getByTestId('orbital-elements')).toContainText('28.50°');
+    await expect(page.getByTestId('orbital-elements')).toContainText('Ω');
+
+    // 地球与轨道所在的区域确实画出了内容
+    const shot = await page.screenshot({ clip: { x: 440, y: 90, width: 560, height: 400 } });
+    expect(shot.byteLength).toBeGreaterThan(60_000);
+
+    // 在地图里拖动、缩放后状态仍然有效
+    const canvas = page.locator('canvas').first();
+    const box = (await canvas.boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height * 0.3);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 + 300, box.y + box.height * 0.3 + 200, { steps: 4 });
+    await page.mouse.up();
+    await page.mouse.wheel(0, 4_000);
+    await page.waitForTimeout(500);
+    await expectAllFinite(page);
+    expect(problems).toEqual([]);
+  });
+
+  test('顺行保持 + 点火：抬高远地点，近地点基本不变（轨道机动的基本规律）', async ({ page }) => {
+    await startApp(page);
+    await enterOrbit(page);
+
+    await page.getByTestId('attitude-prograde').click();
+    await expect(page.getByTestId('attitude-prograde')).toHaveAttribute('aria-pressed', 'true');
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.attitudeMode).toBe('prograde');
+    // 入轨姿态本来就朝东：很快对准速度方向（俯仰≈0，航向≈90°）
+    await expect.poll(async () => Math.abs((await readState(page))!.sim.telemetry!.pitch) * DEG, { timeout: 30_000 }).toBeLessThan(1);
+
+    // 启动二级并给满推力
+    await page.getByTestId('stage-button').click();
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.ignited).toBe(true);
+    expect((await readState(page))!.sim.telemetry!.thrust).toBe(0);
+    await page.keyboard.press('KeyZ');
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.thrust).toBeGreaterThan(5e5);
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.orbit!.apoapsisAltitude, { timeout: 60_000 }).toBeGreaterThan(450_000);
+    await page.keyboard.press('KeyX');
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.thrust).toBe(0);
+
+    const state = await expectAllFinite(page);
+    const orbit = state.sim.telemetry!.orbit!;
+    expect(orbit.classification).toBe('orbit');
+    // 顺行加速只抬高轨道另一侧：近地点仍在点火高度附近
+    expect(orbit.periapsisAltitude).toBeGreaterThan(195_000);
+    expect(orbit.periapsisAltitude).toBeLessThan(215_000);
+    expect(orbit.eccentricity).toBeGreaterThan(0.015);
+    expect(orbit.period).toBeGreaterThan(90 * 60);
+    // 倾角不变（推力在轨道面内）
+    expect(orbit.inclination * DEG).toBeCloseTo(28.5, 1);
+    expect(state.sim.events).toContain('ignition');
+    await expect(page.getByTestId('orbit-status')).toHaveText('在轨');
+
+    // R 再按一次回到手动
+    await page.keyboard.press('KeyR');
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.attitudeMode).toBe('manual');
+    await expect(page.getByTestId('attitude-manual')).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  test('逆行点火离轨：出现预测轨迹与预计落点，最终落在预测的位置', async ({ page }) => {
+    test.setTimeout(240_000);
+    await startApp(page);
+    await enterOrbit(page);
+    await page.keyboard.press('m');
+
+    // 逆行保持：等箭体调头（最大 8°/s，约 23 s；10× 下几秒）
+    await page.keyboard.press('KeyT');
+    await expect(page.getByTestId('attitude-retrograde')).toHaveAttribute('aria-pressed', 'true');
+    await page.getByTestId('warp-10').click();
+    await expect
+      .poll(
+        async () => {
+          const t = (await readState(page))!.sim.telemetry!;
+          // 头部朝西（逆行）且贴近当地水平面
+          return t.heading !== null && t.heading * DEG > 265 && Math.abs(t.pitch) * DEG < 3;
+        },
+        { timeout: 60_000 },
+      )
+      .toBe(true);
+    await page.getByTestId('warp-1').click();
+
+    // 点火减速，直到近地点落到地面以下
+    await page.keyboard.press('Space');
+    await page.keyboard.press('KeyZ');
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.orbit!.periapsisAltitude, { timeout: 60_000 }).toBeLessThan(-150_000);
+    await page.keyboard.press('KeyX');
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.thrust).toBe(0);
+
+    await expect(page.getByTestId('orbit-status')).toHaveText('亚轨道');
+    await expect.poll(async () => (await readState(page))!.sim.predictedImpact, { timeout: 15_000 }).not.toBeNull();
+    await expect(page.getByTestId('predicted-impact')).toBeVisible();
+    await expect(page.getByTestId('predicted-impact')).toContainText('预计落点');
+    await expectAllFinite(page);
+    // 预测每 0.5 s 更新一次：等到相邻两次结果一致（确保拿到的是关机之后的预测）
+    let predicted = (await readState(page))!.sim.predictedImpact!;
+    for (let i = 0; i < 12; i++) {
+      await page.waitForTimeout(800);
+      const next = (await readState(page))!.sim.predictedImpact!;
+      const settled = Math.abs(next.time - predicted.time) < 0.5;
+      predicted = next;
+      if (settled) break;
+    }
+    const now = (await readState(page))!.sim.telemetry!.simTime;
+    // 从 200 km 轨道离轨：十几到二十几分钟后落地
+    expect(predicted.time - now).toBeGreaterThan(600);
+    expect(predicted.time - now).toBeLessThan(2_400);
+
+    // 快进到落地（保持逆行指向）。70 km 以下倍率自动限制在 10×
+    await page.getByTestId('warp-1000').click();
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.altitude, { timeout: 90_000 }).toBeLessThan(70_000);
+    await expect.poll(async () => (await readState(page))!.sim.maxTimeWarp).toBe(10);
+    await expect.poll(async () => (await readState(page))!.sim.outcome?.kind ?? null, { timeout: 150_000 }).toBe('destroyed');
+
+    const state = await expectAllFinite(page);
+    const outcome = state.sim.outcome!;
+    // 预测是在落地前约 20 分钟、相隔几千公里时做出的
+    expect(Math.abs(outcome.time - predicted.time)).toBeLessThan(5);
+    const kmPerRad = 6371;
+    const miss = Math.hypot(
+      (outcome.latitude - predicted.latitude) * kmPerRad,
+      (outcome.longitude - predicted.longitude) * kmPerRad * Math.cos(outcome.latitude),
+    );
+    expect(miss).toBeLessThan(10);
+    await expect(page.getByTestId('flight-summary')).toBeVisible();
   });
 });

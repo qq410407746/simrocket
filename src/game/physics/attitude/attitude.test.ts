@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEG2RAD } from '../constants';
+import { DEG2RAD, EARTH } from '../constants';
 import { IDENTITY, fromAxisAngle, rotate } from '../math/quat';
 import { UNIT_X, UNIT_Y, UNIT_Z, length, vec3 } from '../math/vec3';
 import {
@@ -9,6 +9,15 @@ import {
   respondBodyRate,
   sanitizeAttitudeInput,
 } from './attitude';
+import {
+  POINTING_GAIN,
+  SURFACE_REFERENCE_ALTITUDE,
+  isAttitudeMode,
+  pointingDirection,
+  referenceVelocity,
+  steeringRateCommand,
+  targetAngularVelocity,
+} from './pointing';
 
 const params: AttitudeControlParams = { maxPitchYawRate: 8 * DEG2RAD, maxRollRate: 15 * DEG2RAD, timeConstant: 0.4 };
 
@@ -97,5 +106,124 @@ describe('姿态积分', () => {
   it('角速度为零时姿态不变', () => {
     const q = fromAxisAngle(UNIT_Z, 0.3);
     expect(integrateAttitude(q, vec3(0, 0, 0), 10)).toBe(q);
+  });
+});
+
+describe('自动指向：参考方向', () => {
+  // 600 km 圆轨道：r 沿 +X，v 沿 +Y，角动量沿 +Z
+  const r = vec3(EARTH.RADIUS + 600_000, 0, 0);
+  const v = vec3(0, 7_500, 0);
+
+  it('顺行/逆行沿 ±速度方向；法向沿角动量方向；径向外指向远离地球', () => {
+    close(pointingDirection('prograde', r, v)!, UNIT_Y);
+    close(pointingDirection('retrograde', r, v)!, vec3(0, -1, 0));
+    close(pointingDirection('normal', r, v)!, UNIT_Z);
+    close(pointingDirection('antinormal', r, v)!, vec3(0, 0, -1));
+    close(pointingDirection('radial-out', r, v)!, UNIT_X);
+    close(pointingDirection('radial-in', r, v)!, vec3(-1, 0, 0));
+    expect(pointingDirection('manual', r, v)).toBeNull();
+  });
+
+  it('椭圆轨道上：径向方向在轨道面内且垂直于速度（不等于地心径向）', () => {
+    const vEccentric = vec3(2_000, 7_500, 0);
+    const radial = pointingDirection('radial-out', r, vEccentric)!;
+    expect(length(radial)).toBeCloseTo(1, 12);
+    expect(radial.x * vEccentric.x + radial.y * vEccentric.y).toBeCloseTo(0, 9);
+    expect(radial.z).toBeCloseTo(0, 12);
+    expect(radial.x).toBeGreaterThan(0);
+  });
+
+  it('低空的顺行以相对地面的速度为准，高空以惯性速度为准', () => {
+    // 与地面共转并以 100 m/s 竖直上升：惯性速度几乎水平，相对地面速度竖直
+    const low = vec3(EARTH.RADIUS + 10_000, 0, 0);
+    const vLow = vec3(100, EARTH.ROTATION_RATE * (EARTH.RADIUS + 10_000), 0);
+    close(referenceVelocity(low, vLow), vec3(100, 0, 0), 1e-9);
+    close(pointingDirection('prograde', low, vLow)!, UNIT_X, 1e-9);
+    const high = vec3(EARTH.RADIUS + SURFACE_REFERENCE_ALTITUDE + 1, 0, 0);
+    expect(referenceVelocity(high, vLow)).toBe(vLow);
+  });
+
+  it('方向没有定义时返回 null：速度为零、径向运动', () => {
+    expect(pointingDirection('prograde', r, vec3(0, 0, 0))).toBeNull();
+    expect(pointingDirection('normal', r, vec3(3_000, 0, 0))).toBeNull();
+    expect(isAttitudeMode('prograde')).toBe(true);
+    expect(isAttitudeMode('sideways')).toBe(false);
+    expect(isAttitudeMode(undefined)).toBe(false);
+  });
+});
+
+describe('自动指向：角速度指令', () => {
+  it('转轴使头部沿最短路径转向目标，角速度不超过上限且没有滚转分量', () => {
+    // 姿态为单位四元数：头部沿 +X。目标沿 +Y → 应绕 +Z 正转
+    const command = steeringRateCommand(IDENTITY, UNIT_X, UNIT_Y, params);
+    expect(command.z).toBeCloseTo(params.maxPitchYawRate, 12);
+    expect(command.x).toBeCloseTo(0, 12);
+    expect(command.y).toBeCloseTo(0, 12);
+  });
+
+  it('小角度误差时角速度与误差成正比', () => {
+    const angle = 2 * DEG2RAD;
+    const target = vec3(Math.cos(angle), Math.sin(angle), 0);
+    const command = steeringRateCommand(IDENTITY, UNIT_X, target, params);
+    expect(length(command)).toBeCloseTo(POINTING_GAIN * angle, 9);
+  });
+
+  it('已对准时指令为零；恰好反向时仍给出有限的转动指令', () => {
+    expect(length(steeringRateCommand(IDENTITY, UNIT_X, UNIT_X, params))).toBe(0);
+    const flip = steeringRateCommand(IDENTITY, UNIT_X, vec3(-1, 0, 0), params);
+    expect(length(flip)).toBeCloseTo(params.maxPitchYawRate, 12);
+    expect(flip.x).toBe(0);
+  });
+
+  it('前馈：目标方向以恒定角速度转动时没有稳态滞后；方向突变时不前馈', () => {
+    // 目标绕 +Z 以 1.5°/s 转动，头部初始时与目标重合
+    const spin = 1.5 * DEG2RAD;
+    const dt = 0.02;
+    const targetAt = (t: number) => vec3(Math.cos(spin * t), Math.sin(spin * t), 0);
+    const lag = (useFeedForward: boolean): number => {
+      let q = IDENTITY;
+      let omega = vec3(0, 0, 0);
+      let previous = targetAt(0);
+      for (let i = 1; i <= 3000; i++) {
+        const target = targetAt(i * dt);
+        const feedForward = useFeedForward ? targetAngularVelocity(previous, target, dt, params.maxPitchYawRate) : undefined;
+        omega = respondBodyRate(omega, steeringRateCommand(q, rotate(q, UNIT_X), target, params, feedForward), dt, params.timeConstant);
+        q = integrateAttitude(q, omega, dt);
+        previous = target;
+      }
+      const nose = rotate(q, UNIT_X);
+      const target = targetAt(3000 * dt);
+      return Math.acos(Math.min(1, nose.x * target.x + nose.y * target.y + nose.z * target.z)) / DEG2RAD;
+    };
+    // 纯比例控制：滞后 ≈ 角速度/增益 = 1.5°
+    expect(lag(false)).toBeGreaterThan(1.2);
+    // 加入前馈后只剩一阶响应与离散化带来的百分之几度
+    expect(lag(true)).toBeLessThan(0.05);
+
+    close(targetAngularVelocity(UNIT_X, vec3(Math.cos(0.001), Math.sin(0.001), 0), 0.02, 1), vec3(0, 0, Math.sin(0.001) / 0.02), 1e-12);
+    // 方向在一步内突变 90°：视为不连续，不给前馈
+    expect(length(targetAngularVelocity(UNIT_X, UNIT_Y, 0.02, params.maxPitchYawRate))).toBe(0);
+    expect(length(targetAngularVelocity(UNIT_X, UNIT_Y, 0, params.maxPitchYawRate))).toBe(0);
+  });
+
+  it('闭环：从任意初始姿态收敛到目标方向且超调很小', () => {
+    let q = fromAxisAngle(UNIT_Z, 0);
+    let omega = vec3(0, 0, 0);
+    const target = vec3(Math.cos(2.5), Math.sin(2.5) * 0.8, Math.sin(2.5) * 0.6);
+    const dt = 0.02;
+    let minDot = 1;
+    let aligned = false;
+    for (let i = 0; i < 4000; i++) {
+      const nose = rotate(q, UNIT_X);
+      const cosine = nose.x * target.x + nose.y * target.y + nose.z * target.z;
+      if (cosine > 0.9999) aligned = true;
+      if (aligned) minDot = Math.min(minDot, cosine);
+      omega = respondBodyRate(omega, steeringRateCommand(q, nose, target, params), dt, params.timeConstant);
+      q = integrateAttitude(q, omega, dt);
+    }
+    const nose = rotate(q, UNIT_X);
+    expect(nose.x * target.x + nose.y * target.y + nose.z * target.z).toBeGreaterThan(1 - 1e-9);
+    // 对准之后不再偏离超过 1°
+    expect(Math.acos(minDot) / DEG2RAD).toBeLessThan(1);
   });
 });

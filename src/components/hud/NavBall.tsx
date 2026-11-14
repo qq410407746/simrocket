@@ -1,17 +1,19 @@
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { useMemo, useRef } from 'react';
 import { CanvasTexture, LinearFilter, Matrix4, type Mesh, type OrthographicCamera, SRGBColorSpace, type Sprite, Vector3 } from 'three';
+import { type AttitudeMode, SURFACE_REFERENCE_ALTITUDE, pointingDirection } from '@/game/physics/attitude/pointing';
 import { EARTH, RAD2DEG } from '@/game/physics/constants';
-import { airRelativeVelocityEci, enuBasisAt } from '@/game/physics/frames/frames';
+import { enuBasisAt } from '@/game/physics/frames/frames';
 import { rotate } from '@/game/physics/math/quat';
 import { dot, length, vec3 } from '@/game/physics/math/vec3';
 import { frameState } from '@/rendering/core/frameState';
+import { simRuntime } from '@/stores/simRuntime';
 import { useSimStore } from '@/stores/simStore';
 import { formatAngle } from '@/utils/format';
 import { FLIGHT_KEY_HINTS } from './useFlightControls';
 
 /**
- * 导航球：显示箭体姿态相对当地水平面的关系，以及速度方向标记。
+ * 导航球：显示箭体姿态相对当地水平面的关系，以及轨道参考方向的标记。
  *
  * 约定（与真实航天器及同类游戏的导航球一致）：
  *  - 球心正对观察者的那一点是箭体头部（机体 +X）当前指向的方向；
@@ -22,10 +24,10 @@ import { FLIGHT_KEY_HINTS } from './useFlightControls';
  *
  * 几何上，导航球是"方向球面"的镜像（从外面看一个本应从里面看的球），
  * 所以球面贴图定义在镜像后的当地坐标系（X 东、Y 天、Z 北）中，再用一个真旋转摆到观察坐标系。
+ *
+ * 标记：顺行 / 逆行（黄绿）始终显示；法向 / 反法向（品红）与径向外 / 内（青）只在高空显示
+ * ——它们是轨道面上的概念，在上升段低空没有操作意义。
  */
-
-/** 低于该高度 [m] 时速度标记使用相对地面的速度，否则使用惯性（轨道）速度。 */
-export const SURFACE_MODE_ALTITUDE = 50_000;
 
 const TEX_W = 2048;
 const TEX_H = 1024;
@@ -115,7 +117,12 @@ const createBallTexture = (): CanvasTexture => {
   return texture;
 };
 
-const createMarkerTexture = (kind: 'prograde' | 'retrograde'): CanvasTexture => {
+type MarkerMode = Exclude<AttitudeMode, 'manual'>;
+
+const MARKER_MODES: readonly MarkerMode[] = ['prograde', 'retrograde', 'normal', 'antinormal', 'radial-out', 'radial-in'];
+
+/** 各参考方向的标记图案。 */
+const createMarkerTexture = (mode: MarkerMode): CanvasTexture => {
   const size = 128;
   const canvas = document.createElement('canvas');
   canvas.width = size;
@@ -123,38 +130,66 @@ const createMarkerTexture = (kind: 'prograde' | 'retrograde'): CanvasTexture => 
   const ctx = canvas.getContext('2d');
   if (ctx) {
     const c = size / 2;
-    ctx.strokeStyle = '#d7ff3c';
-    ctx.fillStyle = '#d7ff3c';
+    const color = mode === 'prograde' || mode === 'retrograde' ? '#d7ff3c' : mode === 'normal' || mode === 'antinormal' ? '#ff6bd6' : '#4be3ff';
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
     ctx.lineWidth = 9;
     ctx.lineCap = 'round';
-    ctx.beginPath();
-    ctx.arc(c, c, 26, 0, Math.PI * 2);
-    ctx.stroke();
-    if (kind === 'prograde') {
-      // 顺行：圆 + 中心点 + 上、左、右三条短线
+    ctx.lineJoin = 'round';
+    const line = (x0: number, y0: number, x1: number, y1: number) => {
       ctx.beginPath();
-      ctx.arc(c, c, 5, 0, Math.PI * 2);
-      ctx.fill();
-      for (const [dx, dy] of [[0, -1], [-1, 0], [1, 0]] as const) {
+      ctx.moveTo(c + x0, c + y0);
+      ctx.lineTo(c + x1, c + y1);
+      ctx.stroke();
+    };
+    const circle = (radius: number, fill = false) => {
+      ctx.beginPath();
+      ctx.arc(c, c, radius, 0, Math.PI * 2);
+      if (fill) ctx.fill();
+      else ctx.stroke();
+    };
+    switch (mode) {
+      case 'prograde':
+        // 圆 + 中心点 + 上、左、右三条短线
+        circle(26);
+        circle(5, true);
+        line(0, -30, 0, -52);
+        line(-30, 0, -52, 0);
+        line(30, 0, 52, 0);
+        break;
+      case 'retrograde':
+        // 圆 + 交叉线 + 三条放射短线
+        circle(26);
+        line(-18, -18, 18, 18);
+        line(-18, 18, 18, -18);
+        line(0, -30, 0, -50);
+        line(-26, 15, -43, 25);
+        line(26, 15, 43, 25);
+        break;
+      case 'normal':
+      case 'antinormal': {
+        // 法向：尖端朝上的三角；反法向：尖端朝下
+        const s = mode === 'normal' ? -1 : 1;
         ctx.beginPath();
-        ctx.moveTo(c + dx * 30, c + dy * 30);
-        ctx.lineTo(c + dx * 52, c + dy * 52);
+        ctx.moveTo(c, c + s * 34);
+        ctx.lineTo(c - 32, c - s * 22);
+        ctx.lineTo(c + 32, c - s * 22);
+        ctx.closePath();
         ctx.stroke();
+        circle(5, true);
+        break;
       }
-    } else {
-      // 逆行：圆 + 交叉线
-      for (const s of [1, -1]) {
-        ctx.beginPath();
-        ctx.moveTo(c - 18, c - 18 * s);
-        ctx.lineTo(c + 18, c + 18 * s);
-        ctx.stroke();
-      }
-      for (const [dx, dy] of [[0, -1], [-0.87, 0.5], [0.87, 0.5]] as const) {
-        ctx.beginPath();
-        ctx.moveTo(c + dx * 30, c + dy * 30);
-        ctx.lineTo(c + dx * 50, c + dy * 50);
-        ctx.stroke();
-      }
+      case 'radial-out':
+        // 径向外：圆 + 中心点 + 四条向外的斜线
+        circle(22);
+        circle(5, true);
+        for (const [dx, dy] of [[1, 1], [1, -1], [-1, 1], [-1, -1]] as const) line(dx * 19, dy * 19, dx * 36, dy * 36);
+        break;
+      case 'radial-in':
+        // 径向内：圆 + 四条指向中心的斜线
+        circle(30);
+        for (const [dx, dy] of [[1, 1], [1, -1], [-1, 1], [-1, -1]] as const) line(dx * 18, dy * 18, dx * 6, dy * 6);
+        break;
     }
   }
   const texture = new CanvasTexture(canvas);
@@ -168,13 +203,11 @@ const BODY_Z = vec3(0, 0, 1);
 
 function Ball() {
   const ball = useRef<Mesh>(null);
-  const prograde = useRef<Sprite>(null);
-  const retrograde = useRef<Sprite>(null);
+  const markers = useRef<(Sprite | null)[]>([]);
   const camera = useThree((s) => s.camera) as OrthographicCamera;
   const size = useThree((s) => s.size);
   const texture = useMemo(createBallTexture, []);
-  const progradeTexture = useMemo(() => createMarkerTexture('prograde'), []);
-  const retrogradeTexture = useMemo(() => createMarkerTexture('retrograde'), []);
+  const markerTextures = useMemo(() => MARKER_MODES.map(createMarkerTexture), []);
   const scratch = useMemo(() => ({ m: new Matrix4(), x: new Vector3(), y: new Vector3(), z: new Vector3() }), []);
 
   useFrame(() => {
@@ -189,6 +222,7 @@ function Ball() {
 
     const attitude = frameState.vehicleAttitude;
     const position = frameState.vehiclePosition;
+    const velocity = frameState.vehicleVelocity;
     // 观察坐标轴（在 ECI 中表达）：右 = 机体 +Y，上 = 机体 −Z，朝向观察者 = 机体 +X（头部）
     const right = rotate(attitude, BODY_Y);
     const down = rotate(attitude, BODY_Z);
@@ -202,24 +236,21 @@ function Ball() {
     m.makeBasis(toView(east, x), toView(up, y), toView(north, z));
     mesh.quaternion.setFromRotationMatrix(m);
 
-    // 速度方向标记
-    const altitude = length(position) - EARTH.RADIUS;
-    const velocity =
-      altitude < SURFACE_MODE_ALTITUDE ? airRelativeVelocityEci(position, frameState.vehicleVelocity) : frameState.vehicleVelocity;
-    const speed = length(velocity);
-    const pro = prograde.current;
-    const retro = retrograde.current;
-    if (!pro || !retro) return;
-    if (speed < 0.5) {
-      pro.visible = false;
-      retro.visible = false;
-      return;
-    }
-    toView(velocity, x).multiplyScalar(1 / speed);
-    pro.visible = x.z > 0.02;
-    retro.visible = x.z < -0.02;
-    pro.position.set(x.x, x.y, 1.2);
-    retro.position.set(-x.x, -x.y, 1.2);
+    // 参考方向标记：位于朝向观察者的半球上才显示
+    const orbital = length(position) - EARTH.RADIUS >= SURFACE_REFERENCE_ALTITUDE;
+    MARKER_MODES.forEach((mode, i) => {
+      const sprite = markers.current[i];
+      if (!sprite) return;
+      const velocityMarker = mode === 'prograde' || mode === 'retrograde';
+      const direction = velocityMarker || orbital ? pointingDirection(mode, position, velocity) : null;
+      if (!direction) {
+        sprite.visible = false;
+        return;
+      }
+      toView(direction, x);
+      sprite.visible = x.z > 0.02;
+      sprite.position.set(x.x, x.y, 1.2);
+    });
   });
 
   return (
@@ -228,17 +259,66 @@ function Ball() {
         <sphereGeometry args={[1, 64, 48]} />
         <meshBasicMaterial map={texture} toneMapped={false} />
       </mesh>
-      <sprite ref={prograde} scale={[0.36, 0.36, 1]} visible={false}>
-        <spriteMaterial map={progradeTexture} depthTest={false} toneMapped={false} />
-      </sprite>
-      <sprite ref={retrograde} scale={[0.36, 0.36, 1]} visible={false}>
-        <spriteMaterial map={retrogradeTexture} depthTest={false} toneMapped={false} />
-      </sprite>
+      {MARKER_MODES.map((mode, i) => (
+        <sprite
+          key={mode}
+          ref={(s) => {
+            markers.current[i] = s;
+          }}
+          scale={[0.34, 0.34, 1]}
+          visible={false}
+        >
+          <spriteMaterial map={markerTextures[i]} depthTest={false} toneMapped={false} />
+        </sprite>
+      ))}
     </>
   );
 }
 
-/** 导航球及其下方的姿态读数与键位说明。 */
+const MODE_BUTTONS: readonly { mode: AttitudeMode; label: string; hint: string; color: string }[] = [
+  { mode: 'manual', label: '手动', hint: '手动操纵；松开按键后保持当前姿态', color: 'text-ink' },
+  { mode: 'prograde', label: '顺行', hint: '头部保持指向速度方向（R）。低空以相对地面的速度为准，高空以轨道速度为准', color: 'text-[#d7ff3c]' },
+  { mode: 'retrograde', label: '逆行', hint: '头部保持指向速度的反方向（T）：减速、离轨', color: 'text-[#d7ff3c]' },
+  { mode: 'normal', label: '法向', hint: '头部保持指向轨道面法向：改变轨道倾角', color: 'text-[#ff6bd6]' },
+  { mode: 'antinormal', label: '反法向', hint: '头部保持指向轨道面法向的反方向', color: 'text-[#ff6bd6]' },
+  { mode: 'radial-out', label: '径向外', hint: '头部在轨道面内垂直于速度、指向远离地球的一侧', color: 'text-[#4be3ff]' },
+  { mode: 'radial-in', label: '径向内', hint: '头部在轨道面内垂直于速度、指向地球一侧', color: 'text-[#4be3ff]' },
+];
+
+/** 自动指向模式选择。 */
+function AttitudeModeBar() {
+  const mode = useSimStore((s) => s.telemetry?.attitudeMode ?? 'manual');
+  const flying = useSimStore((s) => s.telemetry?.phase === 'flight');
+  return (
+    <div className="flex items-center gap-1" data-testid="attitude-modes">
+      <span className="mr-0.5 text-[10px] tracking-[0.14em] text-ink-faint">指向</span>
+      {MODE_BUTTONS.map((button) => {
+        const active = mode === button.mode;
+        return (
+          <button
+            key={button.mode}
+            type="button"
+            disabled={!flying}
+            title={button.hint}
+            aria-pressed={active}
+            data-testid={`attitude-${button.mode}`}
+            onClick={(e) => {
+              e.currentTarget.blur();
+              simRuntime.setAttitudeMode(button.mode);
+            }}
+            className={`pointer-events-auto rounded border px-1.5 py-0.5 text-[11px] leading-4 transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+              active ? `border-data bg-data/15 ${button.color}` : 'border-line text-ink-dim hover:border-data-dim hover:text-ink'
+            }`}
+          >
+            {button.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** 导航球及其下方的姿态读数、指向模式与键位说明。 */
 export function NavBall() {
   const pitch = useSimStore((s) => s.telemetry?.pitch ?? null);
   const heading = useSimStore((s) => s.telemetry?.heading ?? null);
@@ -267,7 +347,7 @@ export function NavBall() {
           </g>
         </svg>
       </div>
-      <div className="panel-frame flex flex-col items-center gap-1 rounded-md px-3 py-1.5 backdrop-blur-md">
+      <div className="panel-frame flex flex-col items-center gap-1.5 rounded-md px-3 py-1.5 backdrop-blur-md">
         <div className="flex items-center gap-3">
           <span className="readout text-[11px] text-ink-dim">
             俯仰 <span className="text-data" data-testid="navball-pitch">{formatAngle(pitch)}°</span>
@@ -275,11 +355,12 @@ export function NavBall() {
           <span className="readout text-[11px] text-ink-dim">
             航向 <span className="text-data">{heading === null ? '—' : `${String(Math.round(heading * RAD2DEG) % 360).padStart(3, '0')}°`}</span>
           </span>
-          <span className="text-[10px] text-ink-faint" title="速度标记的参考系：低空用相对地面的速度，高空用惯性（轨道）速度">
-            速度标记：{altitude < SURFACE_MODE_ALTITUDE ? '相对地面' : '轨道'}
+          <span className="text-[10px] text-ink-faint" title="顺行/逆行的参考速度：低空用相对地面的速度，高空用惯性（轨道）速度">
+            速度参考：{altitude < SURFACE_REFERENCE_ALTITUDE ? '相对地面' : '轨道'}
           </span>
         </div>
-        <div className={`flex max-w-[460px] flex-wrap justify-center gap-x-2.5 gap-y-0.5 text-[10px] ${active ? 'text-ink-dim' : 'text-ink-faint'}`}>
+        <AttitudeModeBar />
+        <div className={`flex max-w-[500px] flex-wrap justify-center gap-x-2.5 gap-y-0.5 text-[10px] ${active ? 'text-ink-dim' : 'text-ink-faint'}`}>
           {FLIGHT_KEY_HINTS.map(([key, action]) => (
             <span key={key} className="whitespace-nowrap">
               <kbd className="readout rounded-sm border border-line bg-raised px-1 text-[10px] text-ink">{key}</kbd> {action}

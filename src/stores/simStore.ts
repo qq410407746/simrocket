@@ -3,7 +3,7 @@
  * 渲染层不读这个 store，而是直接读 simRuntime 中的快照缓冲。
  */
 import { create } from 'zustand';
-import type { FlightEvent, FlightOutcome, FlightStats, TimeWarp } from '@/game/simulation/types';
+import type { FlightEvent, FlightOutcome, FlightStats, PredictedImpact, TimeWarp } from '@/game/simulation/types';
 import type { Telemetry } from '@/game/telemetry/telemetry';
 import type { SimulationExecution } from '@/workers/SimulationClient';
 
@@ -31,6 +31,8 @@ interface SimState {
   outcome: FlightOutcome | null;
   /** 最近的飞行事件，按时间先后排列。 */
   events: readonly FlightEvent[];
+  /** 轨迹预测给出的落点（假设从现在起不再有推力）；没有预测或预测时段内不触地时为 null。 */
+  predictedImpact: PredictedImpact | null;
 }
 
 export const INITIAL_SIM_STATE: SimState = {
@@ -47,6 +49,7 @@ export const INITIAL_SIM_STATE: SimState = {
   stats: null,
   outcome: null,
   events: [],
+  predictedImpact: null,
 };
 
 export const useSimStore = create<SimState>()(() => ({ ...INITIAL_SIM_STATE }));

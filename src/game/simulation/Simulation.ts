@@ -26,6 +26,13 @@ import {
   respondBodyRate,
   sanitizeAttitudeInput,
 } from '../physics/attitude/attitude';
+import {
+  type AttitudeMode,
+  isAttitudeMode,
+  pointingDirection,
+  steeringRateCommand,
+  targetAngularVelocity,
+} from '../physics/attitude/pointing';
 import { DEG2RAD, EARTH, STANDARD_GRAVITY } from '../physics/constants';
 import { greenwichMeanSiderealTime } from '../physics/ephemeris/time';
 import {
@@ -43,6 +50,7 @@ import { gravityAcceleration } from '../physics/gravity/pointMass';
 import { type AccelerationFn, type MutableVec3, Rk4Integrator } from '../physics/integration/rk4';
 import { type Quat, fromAxisAngle, isFiniteQuat, multiply, rotate } from '../physics/math/quat';
 import { type Vec3, UNIT_Z, addScaled, cross, dot, isFiniteVec3, length, normalize, sub, vec3 } from '../physics/math/vec3';
+import { elementsFromState } from '../physics/orbital/elements';
 import { engineMassFlow, engineThrust } from '../physics/propulsion/engine';
 import type { RigidBodyState } from '../physics/state/types';
 import {
@@ -64,8 +72,11 @@ import {
   type FlightStats,
   type InitialFlightState,
   PHYSICS_DT,
+  PREDICTION_PERIAPSIS_LIMIT,
+  type PredictedImpact,
   type SimulationConfig,
   type TimeWarp,
+  type TrajectoryPrediction,
 } from './types';
 
 /** 简化姿态控制的参数。 */
@@ -97,6 +108,11 @@ export const LANDING_LIMITS = {
 const CONTACT_TOLERANCE = 1e-3;
 /** 接地时刻二分的迭代次数：把 0.02 s 的步长细分到约 10⁻⁹ s。 */
 const CONTACT_BISECTIONS = 24;
+
+/** 轨迹预测：最长预测时段 [s]、最多积分步数、输出的最多采样点数。 */
+const PREDICTION_MAX_HORIZON = 12 * 3600;
+const PREDICTION_MAX_STEPS = 8000;
+const PREDICTION_MAX_POINTS = 400;
 
 /** 时间倍率限制 —— 发动机工作或有操纵输入时、稠密大气内。 */
 const WARP_LIMIT_POWERED: TimeWarp = 5;
@@ -140,6 +156,27 @@ export const isValidVehicleState = (s: VehicleState): boolean =>
   Object.values(s.flight).every((x) => Number.isFinite(x));
 
 /**
+ * 把轨迹采样点抽稀到不超过 maxPoints 个（保留首尾）。
+ * 采样点在大气内较密、大气外较疏，等间隔抽取即可保持这种疏密关系。
+ */
+const decimateTrajectory = (
+  times: readonly number[],
+  points: readonly number[],
+  maxPoints: number,
+): { times: number[]; points: number[] } => {
+  const count = times.length;
+  if (count <= maxPoints) return { times: [...times], points: [...points] };
+  const outTimes: number[] = [];
+  const outPoints: number[] = [];
+  for (let k = 0; k < maxPoints; k++) {
+    const i = Math.round((k * (count - 1)) / (maxPoints - 1));
+    outTimes.push(times[i] as number);
+    outPoints.push(points[i * 3] as number, points[i * 3 + 1] as number, points[i * 3 + 2] as number);
+  }
+  return { times: outTimes, points: outPoints };
+};
+
+/**
  * 飞行器受力模型：给定位置与速度，计算引力加速度、推力与气动阻力。
  * 字段是"当前积分段"的参数，由 Simulation 在每段开始前设置。
  * 使用标量运算并复用对象——它被 RK4 每步调用四次。
@@ -159,6 +196,12 @@ class VehicleForceModel {
   noseY = 0;
   noseZ = 0;
   aero: AeroProperties = { referenceArea: 1, baseDragCoefficient: 0.3, shape: 'slender', lateralArea: 1 };
+  /**
+   * 非 'manual' 时，纵轴不取上面的固定方向，而是按该指向模式由 (r, v) 即时计算。
+   * 只有轨迹预测使用：预测跨越很长的时间，期间自动指向会让箭体一直跟随参考方向。
+   * 真实飞行的每一步里姿态由姿态模型给出，这里保持 'manual'。
+   */
+  pointing: AttitudeMode = 'manual';
 
   // —— 最近一次 evaluate 的结果 ——
   gx = 0;
@@ -190,6 +233,14 @@ class VehicleForceModel {
     this.airspeed = speed;
     this.mach = speed / atm.speedOfSound;
     if (atm.density > 0 && speed > 1e-9) {
+      if (this.pointing !== 'manual') {
+        const target = pointingDirection(this.pointing, r, v);
+        if (target) {
+          this.noseX = target.x;
+          this.noseY = target.y;
+          this.noseZ = target.z;
+        }
+      }
       const cosAlpha = (vx * this.noseX + vy * this.noseY + vz * this.noseZ) / speed;
       this.cosAlpha = cosAlpha;
       // F_d = −½·ρ·|v|·(C_d·A)·v
@@ -288,6 +339,9 @@ export class Simulation {
   private throttle = 1;
   private ignited = false;
   private attitudeInput: AttitudeInput = NO_ATTITUDE_INPUT;
+  private attitudeMode: AttitudeMode = 'manual';
+  /** 上一步的自动指向目标，用于估计目标方向的转动角速度（前馈）。 */
+  private lastPointing: { readonly mode: AttitudeMode; readonly direction: Vec3 } | null = null;
 
   // —— 自由飞行状态（ECI）——
   private readonly r: MutableVec3 = { x: 0, y: 0, z: 0 };
@@ -317,6 +371,9 @@ export class Simulation {
 
   private readonly rk4 = new Rk4Integrator();
   private readonly forces = new VehicleForceModel();
+  /** 轨迹预测专用的受力模型与积分器：与真实状态的推进完全隔离。 */
+  private readonly predictionForces = new VehicleForceModel();
+  private readonly predictionRk4 = new Rk4Integrator();
   private readonly ballistic = new BallisticForceModel();
   private readonly r0: MutableVec3 = { x: 0, y: 0, z: 0 };
   private readonly v0: MutableVec3 = { x: 0, y: 0, z: 0 };
@@ -351,7 +408,12 @@ export class Simulation {
     }
     if (length(initial.position) < EARTH.RADIUS) throw new Error('Simulation: 初始位置位于地面以下');
     const separated = Math.max(0, Math.min(this.cfg.stages.length, Math.floor(initial.separatedStages ?? 0)));
-    for (let i = 0; i < separated; i++) (this.cfg.stages[i] as MutableStage).attached = false;
+    this.cfg.stages.forEach((stage, i) => {
+      if (i < separated) stage.attached = false;
+      const override = initial.stagePropellant?.[i];
+      const capacity = this.vehicle.stages[i]?.propellantMass ?? 0;
+      if (override !== undefined && Number.isFinite(override)) stage.propellantMass = Math.max(0, Math.min(capacity, override));
+    });
     if (initial.fairingJettisoned) this.cfg.fairingAttached = false;
     this.refreshConfiguration();
 
@@ -463,6 +525,7 @@ export class Simulation {
       throttle: this.throttle,
       ignited: this.ignited,
       attitudeInput: this.attitudeInput,
+      attitudeMode: this.attitudeMode,
       phase: this.phase,
       mass: this.mass,
       centerOfMassHeight: this.centerOfMassHeight,
@@ -482,11 +545,16 @@ export class Simulation {
     this.attitudeInput = sanitizeAttitudeInput(input);
   }
 
+  /** 自动指向模式。无效的取值被忽略。手动操纵输入会暂时覆盖自动指向。 */
+  setAttitudeMode(mode: AttitudeMode): void {
+    if (isAttitudeMode(mode)) this.attitudeMode = mode;
+  }
+
   /**
    * 执行飞行序列的下一步：
    *   发射台上 → 发动机点火；
-   *   飞行中   → 分离当前最低一级，并点燃它上面的推进级；
-   *   只剩载荷 → 载荷自带发动机点火（若有）。
+   *   飞行中，当前推进单元有推进剂但尚未启用 → 点火（载荷发动机、或从轨道开始时的上面级）；
+   *   飞行中，其余情况 → 分离当前最低一级，并点燃它上面的推进级。
    */
   stage(): void {
     if (this.phase === 'prelaunch') {
@@ -498,17 +566,21 @@ export class Simulation {
     }
     if (this.phase !== 'flight') return;
 
+    // 当前推进单元还有推进剂但尚未启用（载荷发动机，或"从轨道开始"时的上面级）：先点火。
+    const propulsion = activePropulsion(this.vehicle, this.cfg);
+    if (!this.ignited && propulsion && propulsion.propellantMass > 0) {
+      this.ignited = true;
+      if (propulsion.source === 'stage') this.emit('ignition', propulsion.stageIndex);
+      else this.emit('payload-ignition', -1);
+      return;
+    }
+
     const index = lowestAttachedStage(this.cfg);
     if (index < this.cfg.stages.length) {
       this.separateStage(index);
       const next = lowestAttachedStage(this.cfg);
       this.ignited = next < this.cfg.stages.length;
       if (this.ignited) this.emit('ignition', next);
-      return;
-    }
-    if (!this.ignited && activePropulsion(this.vehicle, this.cfg)) {
-      this.ignited = true;
-      this.emit('payload-ignition', -1);
     }
   }
 
@@ -621,7 +693,7 @@ export class Simulation {
     const fm = this.forces;
 
     // 姿态（算子分裂）：先转半步，用中点姿态做平动积分，再转后半步。
-    this.omega = respondBodyRate(this.omega, commandedBodyRate(this.attitudeInput, ATTITUDE_CONTROL), dt, ATTITUDE_CONTROL.timeConstant);
+    this.omega = respondBodyRate(this.omega, this.bodyRateCommand(), dt, ATTITUDE_CONTROL.timeConstant);
     const midAttitude = integrateAttitude(this.attitude, this.omega, dt / 2);
     const nose = rotate(midAttitude, BODY_X);
     fm.noseX = nose.x;
@@ -696,6 +768,104 @@ export class Simulation {
       angleOfAttack: Math.acos(Math.max(-1, Math.min(1, fm.cosAlpha))),
     };
     this.updateStats();
+  }
+
+  /** 本步的角速度指令：有手动输入时听手动的；否则按自动指向模式转向目标方向；都没有则保持姿态。 */
+  private bodyRateCommand(): Vec3 {
+    const input = this.attitudeInput;
+    const manual = input.pitch !== 0 || input.yaw !== 0 || input.roll !== 0;
+    if (manual || this.attitudeMode === 'manual') {
+      this.lastPointing = null;
+      return commandedBodyRate(input, ATTITUDE_CONTROL);
+    }
+    const target = pointingDirection(this.attitudeMode, this.r, this.v);
+    if (!target) {
+      this.lastPointing = null;
+      return vec3(0, 0, 0);
+    }
+    // 前馈：目标方向相对上一步的转动角速度（同一指向模式下才有意义）
+    const previous = this.lastPointing;
+    const feedForward =
+      previous && previous.mode === this.attitudeMode
+        ? targetAngularVelocity(previous.direction, target, this.dt, ATTITUDE_CONTROL.maxPitchYawRate)
+        : undefined;
+    this.lastPointing = { mode: this.attitudeMode, direction: target };
+    return steeringRateCommand(this.attitude, rotate(this.attitude, BODY_X), target, ATTITUDE_CONTROL, feedForward);
+  }
+
+  /**
+   * 轨迹预测：假设从现在起发动机关机、指向模式不变（手动模式即惯性姿态保持不变），
+   * 在状态的副本上传播 引力 + 阻力，直到触地或超出预测时段。不改变真实状态。
+   *
+   * 步长随环境调整（预测只用于显示，不需要 0.02 s 的步长）：
+   *   大气内约 0.5–1 s；大气外取轨道特征时间 r/|v| 的 1%，上限 120 s。
+   * 不在飞行中、或轨道近地点高于 PREDICTION_PERIAPSIS_LIMIT（稳定轨道，用解析圆锥曲线即可）时返回 null。
+   */
+  predictTrajectory(): TrajectoryPrediction | null {
+    if (this.phase !== 'flight') return null;
+    const elements = elementsFromState(this.r, this.v);
+    if (elements.periapsisRadius - EARTH.RADIUS >= PREDICTION_PERIAPSIS_LIMIT) return null;
+
+    const fm = this.predictionForces;
+    fm.aero = this.forces.aero;
+    fm.noseX = this.forces.noseX;
+    fm.noseY = this.forces.noseY;
+    fm.noseZ = this.forces.noseZ;
+    fm.pointing = this.attitudeMode;
+    fm.thrustVacuum = 0;
+    fm.exitArea = 0;
+    fm.massFlow = 0;
+    fm.mass0 = this.mass;
+    fm.t0 = 0;
+
+    const r: MutableVec3 = { x: this.r.x, y: this.r.y, z: this.r.z };
+    const v: MutableVec3 = { x: this.v.x, y: this.v.y, z: this.v.z };
+    const start = this.time;
+    const horizon = Math.min(PREDICTION_MAX_HORIZON, Number.isFinite(elements.period) ? elements.period * 1.05 : PREDICTION_MAX_HORIZON);
+    const times: number[] = [start];
+    const points: number[] = [r.x, r.y, r.z];
+    let impact: PredictedImpact | null = null;
+    let elapsed = 0;
+
+    for (let i = 0; i < PREDICTION_MAX_STEPS && elapsed < horizon; i++) {
+      const radius = Math.hypot(r.x, r.y, r.z);
+      const speed = Math.hypot(v.x, v.y, v.z);
+      const altitude = radius - EARTH.RADIUS;
+      let h = Math.min(120, Math.max(0.5, (0.01 * radius) / Math.max(speed, 1)));
+      if (altitude < 150_000) h = Math.min(h, 1);
+      if (altitude < 90_000) h = 0.5;
+      const px = r.x;
+      const py = r.y;
+      const pz = r.z;
+      this.predictionRk4.step(r, v, elapsed, h, fm.acceleration);
+      const newRadius = Math.hypot(r.x, r.y, r.z);
+
+      if (newRadius <= EARTH.RADIUS) {
+        // 触地发生在本步内：按高度线性插值出触地点
+        const s = radius > newRadius ? (radius - EARTH.RADIUS) / (radius - newRadius) : 1;
+        const ix = px + (r.x - px) * s;
+        const iy = py + (r.y - py) * s;
+        const iz = pz + (r.z - pz) * s;
+        const impactTime = start + elapsed + h * s;
+        const geodetic = ecefToGeodetic(eciToEcef(vec3(ix, iy, iz), earthRotationAngle(this.earthAngleAtEpoch, impactTime)));
+        impact = {
+          time: impactTime,
+          latitude: geodetic.latitude,
+          longitude: geodetic.longitude,
+          speed: Math.hypot(v.x + OMEGA * r.y, v.y - OMEGA * r.x, v.z),
+        };
+        times.push(impactTime);
+        points.push(ix, iy, iz);
+        break;
+      }
+      elapsed += h;
+      times.push(start + elapsed);
+      points.push(r.x, r.y, r.z);
+      // 飞到很远处（逃逸轨道）就不再继续
+      if (newRadius > 80 * EARTH.RADIUS) break;
+    }
+
+    return { computedAt: start, ...decimateTrajectory(times, points, PREDICTION_MAX_POINTS), impact };
   }
 
   /**
@@ -774,6 +944,7 @@ export class Simulation {
     this.phase = kind;
     this.ignited = false;
     this.attitudeInput = NO_ATTITUDE_INPUT;
+    this.attitudeMode = 'manual';
     this.outcome = {
       kind,
       time,

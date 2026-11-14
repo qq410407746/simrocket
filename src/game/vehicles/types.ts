@@ -6,6 +6,7 @@
  */
 import type { DragShape } from '../physics/aerodynamics/drag';
 import type { AttitudeInput } from '../physics/attitude/attitude';
+import type { AttitudeMode } from '../physics/attitude/pointing';
 import type { Vec3 } from '../physics/math/vec3';
 import type { EnginePerformanceParams } from '../physics/propulsion/engine';
 import type { RigidBodyState } from '../physics/state/types';
@@ -185,6 +186,8 @@ export interface VehicleState {
   readonly ignited: boolean;
   /** 当前的姿态操纵输入。 */
   readonly attitudeInput: AttitudeInput;
+  /** 自动指向模式；'manual' 为手动（无输入时保持当前惯性姿态）。 */
+  readonly attitudeMode: AttitudeMode;
   readonly phase: FlightPhase;
   /** 当前总质量 [kg]。 */
   readonly mass: number;

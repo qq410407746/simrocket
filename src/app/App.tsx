@@ -42,12 +42,13 @@ export function App() {
   const screen = useGameStore((s) => s.screen);
   const vehicleId = useGameStore((s) => s.vehicleId);
   const siteId = useGameStore((s) => s.siteId);
+  const startMode = useGameStore((s) => s.startMode);
   const webgl = useMemo(detectWebGL2, []);
 
-  // 玩家选择的火箭或发射场变化时，以新配置重新开始模拟。
+  // 玩家选择的火箭、发射场或出发点变化时，以新配置重新开始模拟。
   useEffect(() => {
-    simRuntime.start(createSimulationConfig(getVehicleOrDefault(vehicleId), getLaunchSiteOrDefault(siteId)));
-  }, [vehicleId, siteId]);
+    simRuntime.start(createSimulationConfig(getVehicleOrDefault(vehicleId), getLaunchSiteOrDefault(siteId), startMode));
+  }, [vehicleId, siteId, startMode]);
 
   useEffect(() => () => simRuntime.stop(), []);
 

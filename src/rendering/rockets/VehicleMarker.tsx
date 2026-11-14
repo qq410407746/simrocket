@@ -1,9 +1,9 @@
 import { useFrame } from '@react-three/fiber';
 import { useMemo, useRef } from 'react';
 import { CanvasTexture, type Sprite } from 'three';
-import { EARTH } from '@/game/physics/constants';
-import { dot, length, scale, sub } from '@/game/physics/math/vec3';
+import { length, sub } from '@/game/physics/math/vec3';
 import { FRAME_PRIORITY, frameState } from '../core/frameState';
+import { isOccludedByEarth } from '../core/occlusion';
 import { eciToRenderRelative } from '../core/renderSpace';
 
 const MARKER_PIXELS = 30;
@@ -52,31 +52,20 @@ export function VehicleMarker() {
       return;
     }
     const cam = frameState.cameraPosition;
-    const toVehicle = sub(frameState.vehicleFocus, cam);
-    const dist = length(toVehicle);
-    // 火箭在屏幕上的像素高度
-    const pixels = frameState.vehicleHeight / Math.max(dist * frameState.pixelAngle, 1e-9);
+    const dist = length(sub(frameState.vehicleFocus, cam));
+    // 火箭在屏幕上的高度（CSS 像素，与屏幕的像素密度无关）
+    const cssPixelAngle = frameState.pixelAngle * frameState.pixelRatio;
+    const pixels = frameState.vehicleHeight / Math.max(dist * cssPixelAngle, 1e-9);
     const opacity = 1 - Math.min(1, Math.max(0, (pixels - 10) / 30));
 
-    // 遮挡判断：相机→飞行器的线段是否穿过地球（双精度稳定求根）
-    let occluded = false;
-    if (dist > 0) {
-      const dir = scale(toVehicle, 1 / dist);
-      const b = dot(cam, dir);
-      const c = (length(cam) - EARTH.RADIUS) * (length(cam) + EARTH.RADIUS);
-      const disc = b * b - c;
-      if (disc > 0 && b < 0) {
-        const tNear = c / (-b + Math.sqrt(disc));
-        occluded = tNear > 0 && tNear < dist - 1000;
-      }
-    }
+    const occluded = isOccludedByEarth(cam, frameState.vehicleFocus);
 
     s.visible = opacity > 0.01 && !occluded;
     if (!s.visible) return;
     s.material.opacity = opacity;
     eciToRenderRelative(frameState.vehicleFocus, cam, s.position);
     // sizeAttenuation = false 时，scale 表示距离为 1 处的尺寸，即视角的正切。
-    const angular = MARKER_PIXELS * frameState.pixelAngle;
+    const angular = MARKER_PIXELS * cssPixelAngle;
     s.scale.set(angular, angular, 1);
   }, FRAME_PRIORITY.SCENE);
 
