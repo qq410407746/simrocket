@@ -4,18 +4,25 @@
  * 飞行阶段：
  *  - prelaunch  飞行器被牵制机构固定在发射台上，随地球自转（解析解）。点火后发动机消耗推进剂；
  *               当推力超过保持静止所需的支撑力时释放，进入自由飞行。
- *  - flight     自由飞行。平动：引力 + 推力 + 气动阻力，RK4 固定步长积分。
+ *  - flight     自由飞行。平动：引力 + 推力 + 气动力（阻力、升力、降落伞），RK4 固定步长积分。
  *               姿态：角速度指令的一阶响应（简化模型，见 physics/attitude）。
- *  - landed / destroyed  接地后固定在地固系中，飞行结束。
+ *               每步结束后推进三个热区的热状态，并检查热、过载、动压失效。
+ *  - landed / destroyed  飞行结束：固定在地固系中（接地点，或空中解体的位置）。
  *
  * 一个物理步内会被精确处理的事件（不会因步长或时间倍率而错过）：
  *  - 推进剂耗尽：把该步拆成"有动力段 + 无动力段"；
  *  - 接地：对步内时间做二分，定位接地瞬间并记录当时的速度与姿态。
  *
- * 尚未建模（如实说明）：升力与气动力矩、结构与热失效、降落伞、发动机启动/关机瞬态、
- * 推进剂晃动与沉底、分离体之间的碰撞。
+ * 尚未建模（如实说明）：气动力矩、发动机启动/关机瞬态、推进剂晃动与沉底、分离体之间的碰撞、
+ * 分离体的气动加热；解体后的残骸不再模拟。
  */
-import { type AeroProperties, CROSS_FLOW_DRAG_COEFFICIENT, dragArea, dynamicPressure } from '../physics/aerodynamics/drag';
+import {
+  type AeroProperties,
+  CROSS_FLOW_DRAG_COEFFICIENT,
+  axialForceArea,
+  dynamicPressure,
+  normalForceArea,
+} from '../physics/aerodynamics/drag';
 import { type AtmosphereSample, sampleAtmosphere } from '../physics/atmosphere/standardAtmosphere';
 import {
   type AttitudeControlParams,
@@ -53,19 +60,44 @@ import { type Vec3, UNIT_Z, addScaled, cross, dot, isFiniteVec3, length, normali
 import { elementsFromState } from '../physics/orbital/elements';
 import { engineMassFlow, engineThrust } from '../physics/propulsion/engine';
 import type { RigidBodyState } from '../physics/state/types';
+import { type ThermalZoneId, environmentTemperature, exposure, stagnationHeatFlux } from '../physics/thermodynamics/heating';
+import {
+  type ThermalFailure,
+  type ThermalZoneState,
+  ablatorFraction,
+  createThermalZoneState,
+  stepThermalZone,
+  thermalMargin,
+} from '../physics/thermodynamics/thermalZone';
 import {
   type ActivePropulsion,
+  DEFAULT_LANDING_LIMITS,
+  type ThermalZoneSetup,
   activePropulsion,
   configurationAero,
+  configurationLandingLimits,
   configurationMassProperties,
+  configurationParachute,
+  configurationStructure,
+  configurationThermalZones,
   initialConfiguration,
   lowestAttachedStage,
   stackHeight,
   stageAloneMassProperties,
 } from '../vehicles/configuration';
-import type { FlightDiagnostics, FlightPhase, VehicleDefinition, VehicleState } from '../vehicles/types';
+import type {
+  FlightDiagnostics,
+  FlightPhase,
+  LandingLimits,
+  ParachuteDefinition,
+  ParachutePhase,
+  StructuralLimits,
+  VehicleDefinition,
+  VehicleState,
+} from '../vehicles/types';
 import {
   type DebrisState,
+  type FailureCause,
   type FlightEvent,
   type FlightEventKind,
   type FlightOutcome,
@@ -94,15 +126,23 @@ const FAIRING_SEPARATION_SPEED = 3;
 const MAX_DEBRIS = 8;
 const DEBRIS_LIFETIME = 1800;
 
-/** 可承受的接地条件（没有起落架与降落伞，容限很小）。 */
-export const LANDING_LIMITS = {
-  /** 最大垂直速度 [m/s]。 */
-  verticalSpeed: 4,
-  /** 最大水平速度 [m/s]。 */
-  horizontalSpeed: 2,
-  /** 箭体纵轴偏离竖直方向的最大角度 [rad]。 */
-  tilt: 15 * DEG2RAD,
-} as const;
+/** 没有着陆装置的飞行器可承受的接地条件（容限很小）。返回舱使用自己的限值。 */
+export const LANDING_LIMITS = DEFAULT_LANDING_LIMITS;
+
+/** 结构限值（过载、动压、横向气动载荷）需要被连续超过这么久 [s] 才判定解体，滤掉单步的数值尖峰。 */
+export const STRUCTURAL_FAILURE_DELAY = 0.2;
+
+/** 降落伞打开后，返回舱被伞绳拉正（头部指向来流的反方向）的最大角速度 [rad/s]。 */
+const PARACHUTE_ALIGN_RATE = 25 * DEG2RAD;
+const PARACHUTE_ATTITUDE: AttitudeControlParams = { maxPitchYawRate: PARACHUTE_ALIGN_RATE, maxRollRate: 0, timeConstant: 0.45 };
+/** 已张开的伞可承受的动压相对开伞限值的倍数：超过则伞被撕毁。 */
+const DROGUE_OVERLOAD_FACTOR = 1.5;
+const MAIN_OVERLOAD_FACTOR = 4;
+/** 参考驻点热流（1 m 曲率半径）超过该值 [W/m²] 时，已张开的伞衣被烧毁。 */
+const PARACHUTE_HEAT_LIMIT = 20_000;
+
+/** 对流热流超过该值 [W/m²] 时视为"正在受热"，限制时间倍率。 */
+const HEATING_WARP_THRESHOLD = 20_000;
 
 /** 低于地面超过该值 [m] 才判定为接地，避免起飞瞬间的浮点误差误触发。 */
 const CONTACT_TOLERANCE = 1e-3;
@@ -116,6 +156,7 @@ const PREDICTION_MAX_POINTS = 400;
 
 /** 时间倍率限制 —— 发动机工作或有操纵输入时、稠密大气内。 */
 const WARP_LIMIT_POWERED: TimeWarp = 5;
+/** 稠密大气内、气动加热期间、降落伞打开后。 */
 const WARP_LIMIT_ATMOSPHERE: TimeWarp = 10;
 const WARP_LIMIT_NONE: TimeWarp = 1000;
 /** 低于该高度 [m] 视为处于稠密大气内。 */
@@ -135,7 +176,10 @@ const ZERO_DIAGNOSTICS: FlightDiagnostics = Object.freeze({
   mach: 0,
   dynamicPressure: 0,
   drag: 0,
+  lift: 0,
   angleOfAttack: 0,
+  bendingLoad: 0,
+  referenceHeatFlux: 0,
 });
 
 const clamp01 = (x: number): number => Math.max(0, Math.min(1, x));
@@ -153,7 +197,17 @@ export const isValidVehicleState = (s: VehicleState): boolean =>
   Number.isFinite(s.throttle) &&
   Number.isFinite(s.payloadPropellantMass) &&
   s.stages.every((st) => Number.isFinite(st.propellantMass) && st.propellantMass >= 0) &&
-  Object.values(s.flight).every((x) => Number.isFinite(x));
+  Object.values(s.flight).every((x) => Number.isFinite(x)) &&
+  Number.isFinite(s.parachute.dragArea) &&
+  s.thermal.every(
+    (z) =>
+      Number.isFinite(z.surfaceTemperature) &&
+      Number.isFinite(z.interiorTemperature) &&
+      Number.isFinite(z.heatFlux) &&
+      Number.isFinite(z.heatLoad) &&
+      Number.isFinite(z.ablatorFraction) &&
+      Number.isFinite(z.margin),
+  );
 
 /**
  * 把轨迹采样点抽稀到不超过 maxPoints 个（保留首尾）。
@@ -177,7 +231,7 @@ const decimateTrajectory = (
 };
 
 /**
- * 飞行器受力模型：给定位置与速度，计算引力加速度、推力与气动阻力。
+ * 飞行器受力模型：给定位置与速度，计算引力加速度、推力与气动力（轴向力 + 法向力 + 降落伞阻力）。
  * 字段是"当前积分段"的参数，由 Simulation 在每段开始前设置。
  * 使用标量运算并复用对象——它被 RK4 每步调用四次。
  */
@@ -196,6 +250,8 @@ class VehicleForceModel {
   noseY = 0;
   noseZ = 0;
   aero: AeroProperties = { referenceArea: 1, baseDragCoefficient: 0.3, shape: 'slender', lateralArea: 1 };
+  /** 降落伞当前的阻力面积 C_d·A [m²]：沿来流方向的纯阻力。 */
+  parachuteArea = 0;
   /**
    * 非 'manual' 时，纵轴不取上面的固定方向，而是按该指向模式由 (r, v) 即时计算。
    * 只有轨迹预测使用：预测跨越很长的时间，期间自动指向会让箭体一直跟随参考方向。
@@ -208,9 +264,10 @@ class VehicleForceModel {
   gy = 0;
   gz = 0;
   thrust = 0;
-  dragX = 0;
-  dragY = 0;
-  dragZ = 0;
+  /** 气动力合力 [N]（阻力 + 升力 + 降落伞），ECI。 */
+  aeroX = 0;
+  aeroY = 0;
+  aeroZ = 0;
   airspeed = 0;
   mach = 0;
   cosAlpha = 1;
@@ -241,18 +298,24 @@ class VehicleForceModel {
           this.noseZ = target.z;
         }
       }
-      const cosAlpha = (vx * this.noseX + vy * this.noseY + vz * this.noseZ) / speed;
+      const cosAlpha = Math.max(-1, Math.min(1, (vx * this.noseX + vy * this.noseY + vz * this.noseZ) / speed));
       this.cosAlpha = cosAlpha;
-      // F_d = −½·ρ·|v|·(C_d·A)·v
-      const c = -0.5 * atm.density * speed * dragArea(this.aero, this.mach, cosAlpha);
-      this.dragX = c * vx;
-      this.dragY = c * vy;
-      this.dragZ = c * vz;
+      // 机体轴上的气动力（见 physics/aerodynamics/drag.ts）：
+      //   轴向力 −q·C_A·A_ref·cos α·x̂ ，法向力 −q·C_N·A_lat·k·(v̂ − cos α·x̂) ，降落伞 −q·(C_d·A)_伞·v̂
+      // 合并： F = −½ρ|v|·[ (A_轴 − A_法)·cos α·|v|·x̂ + (A_法 + A_伞)·v ]
+      const axial = axialForceArea(this.aero, this.mach);
+      const normal = normalForceArea(this.aero, 1 - cosAlpha * cosAlpha);
+      const c = -0.5 * atm.density * speed;
+      const along = (axial - normal) * cosAlpha * speed;
+      const across = normal + this.parachuteArea;
+      this.aeroX = c * (along * this.noseX + across * vx);
+      this.aeroY = c * (along * this.noseY + across * vy);
+      this.aeroZ = c * (along * this.noseZ + across * vz);
     } else {
       this.cosAlpha = 1;
-      this.dragX = 0;
-      this.dragY = 0;
-      this.dragZ = 0;
+      this.aeroX = 0;
+      this.aeroY = 0;
+      this.aeroZ = 0;
     }
 
     // F = τ·F_vac − p_a·A_e（不小于 0）
@@ -262,9 +325,9 @@ class VehicleForceModel {
   readonly acceleration: AccelerationFn = (t, r, v, out) => {
     this.evaluate(r, v);
     const mass = this.mass0 - this.massFlow * (t - this.t0);
-    out.x = this.gx + (this.thrust * this.noseX + this.dragX) / mass;
-    out.y = this.gy + (this.thrust * this.noseY + this.dragY) / mass;
-    out.z = this.gz + (this.thrust * this.noseZ + this.dragZ) / mass;
+    out.x = this.gx + (this.thrust * this.noseX + this.aeroX) / mass;
+    out.y = this.gy + (this.thrust * this.noseY + this.aeroY) / mass;
+    out.z = this.gz + (this.thrust * this.noseZ + this.aeroZ) / mass;
   };
 }
 
@@ -310,7 +373,22 @@ interface MutableStats {
   maxInertialSpeed: number;
   maxGLoad: number;
   maxDynamicPressure: number;
+  maxHeatFlux: number;
+  maxSurfaceTemperature: number;
+  maxHeatLoad: number;
 }
+
+/** 一个热区：归属与参数（随构型变化）+ 热状态。 */
+interface ThermalZone {
+  setup: ThermalZoneSetup;
+  state: ThermalZoneState;
+}
+
+const THERMAL_FAILURE_CAUSE: Record<ThermalFailure, FailureCause> = {
+  surface: 'thermal-surface',
+  'burn-through': 'burn-through',
+  structure: 'thermal-structure',
+};
 
 interface MutableStage {
   propellantMass: number;
@@ -363,7 +441,26 @@ export class Simulation {
     maxInertialSpeed: 0,
     maxGLoad: 0,
     maxDynamicPressure: 0,
+    maxHeatFlux: 0,
+    maxSurfaceTemperature: 0,
+    maxHeatLoad: 0,
   };
+
+  // —— 热防护、结构、降落伞 ——
+  /** 发射场的气温 [K]：各表面的初始温度。 */
+  private readonly ambientTemperature: number;
+  private thermalZones: ThermalZone[] = [];
+  private structure: StructuralLimits = { maxGLoad: Infinity, maxDynamicPressure: Infinity, maxBendingLoad: Infinity };
+  private landingLimits: LandingLimits = DEFAULT_LANDING_LIMITS;
+  private parachute: ParachuteDefinition | null = null;
+  private parachutePhase: ParachutePhase = 'none';
+  /** 当前降落伞阶段已经持续的时间 [s]。 */
+  private parachuteTimer = 0;
+  private parachuteArea = 0;
+  /** 各项结构限值被连续超过的时间 [s]。 */
+  private overloadTime = 0;
+  private pressureTime = 0;
+  private bendingTime = 0;
 
   private debris: DebrisBody[] = [];
   private nextDebrisId = 1;
@@ -396,7 +493,10 @@ export class Simulation {
       payloadPropellantMass: initial.payloadPropellantMass,
       fairingAttached: initial.fairingAttached,
     };
+    this.ambientTemperature = sampleAtmosphere(config.site.altitude, this.padAtmosphere).temperature;
     this.refreshConfiguration();
+    this.refreshStructure();
+    this.stats.maxSurfaceTemperature = this.ambientTemperature;
     this.updatePadDiagnostics(0, 0, 0);
     if (config.initialState) this.startInFlight(config.initialState);
   }
@@ -416,6 +516,7 @@ export class Simulation {
     });
     if (initial.fairingJettisoned) this.cfg.fairingAttached = false;
     this.refreshConfiguration();
+    this.refreshStructure();
 
     this.r.x = initial.position.x;
     this.r.y = initial.position.y;
@@ -435,7 +536,7 @@ export class Simulation {
     this.forces.noseY = nose.y;
     this.forces.noseZ = nose.z;
     this.forces.evaluate(this.r, this.v);
-    this.specificForce = vec3(this.forces.dragX / this.mass, this.forces.dragY / this.mass, this.forces.dragZ / this.mass);
+    this.specificForce = vec3(this.forces.aeroX / this.mass, this.forces.aeroY / this.mass, this.forces.aeroZ / this.mass);
   }
 
   // ───────────────────────────── 只读访问 ─────────────────────────────
@@ -475,7 +576,13 @@ export class Simulation {
     if (this.phase !== 'flight') return WARP_LIMIT_NONE;
     if (this.diagnostics.thrust > 0 || steering) return WARP_LIMIT_POWERED;
     const altitude = Math.hypot(this.r.x, this.r.y, this.r.z) - EARTH.RADIUS;
-    return altitude < ATMOSPHERE_WARP_ALTITUDE ? WARP_LIMIT_ATMOSPHERE : WARP_LIMIT_NONE;
+    if (altitude < ATMOSPHERE_WARP_ALTITUDE) return WARP_LIMIT_ATMOSPHERE;
+    if (this.parachutePhase === 'drogue' || this.parachutePhase === 'main') return WARP_LIMIT_ATMOSPHERE;
+    // 70 km 以上仍可能有明显的气动加热（高速掠过高层大气）
+    for (const zone of this.thermalZones) {
+      if (zone.state.convectiveFlux > HEATING_WARP_THRESHOLD) return WARP_LIMIT_ATMOSPHERE;
+    }
+    return WARP_LIMIT_NONE;
   }
 
   /** 取出并清空自上次调用以来发生的事件。 */
@@ -531,6 +638,22 @@ export class Simulation {
       centerOfMassHeight: this.centerOfMassHeight,
       specificForce,
       flight: { ...this.diagnostics },
+      thermal: this.thermalZones.map(({ setup, state }) => ({
+        zone: setup.zone,
+        owner: setup.owner,
+        material: setup.surface.material,
+        surfaceTemperature: state.surfaceTemperature,
+        interiorTemperature: state.interiorTemperature,
+        surfaceLimit: setup.surface.ablator ? setup.surface.ablator.temperature : setup.surface.maxSurfaceTemperature,
+        interiorLimit: setup.surface.maxInteriorTemperature,
+        heatFlux: state.convectiveFlux,
+        heatLoad: state.heatLoad,
+        ablative: setup.surface.ablator !== null,
+        ablatorFraction: ablatorFraction(setup.surface, state),
+        margin: thermalMargin(setup.surface, state, this.ambientTemperature),
+        failure: state.failure,
+      })),
+      parachute: { phase: this.parachutePhase, dragArea: this.parachuteArea },
     };
   }
 
@@ -584,6 +707,26 @@ export class Simulation {
     }
   }
 
+  /**
+   * 开伞（仅对已与推进级分离、带降落伞的返回舱有效）。
+   * 先放出减速伞；减速伞张满且动压降到主伞开伞值以下时，主伞自动打开。
+   * 开伞时动压或马赫数超出限值，伞会被撕毁，无法再次使用。
+   */
+  deployParachute(): void {
+    const chute = this.parachute;
+    if (this.phase !== 'flight' || !chute || this.parachutePhase !== 'stowed') return;
+    const { dynamicPressure: q, mach } = this.diagnostics;
+    if (q > chute.maxDeployDynamicPressure || mach > chute.maxDeployMach) {
+      this.parachutePhase = 'lost';
+      this.emit('parachute-failed', -1);
+      return;
+    }
+    this.parachutePhase = 'drogue';
+    this.parachuteTimer = 0;
+    this.attitudeMode = 'manual';
+    this.emit('drogue-deployed', -1);
+  }
+
   /** 抛整流罩（仅飞行中有效）。两个半罩沿机体 ±Y 方向分离。 */
   jettisonFairing(): void {
     const { payload } = this.vehicle;
@@ -618,6 +761,7 @@ export class Simulation {
 
     this.cfg.fairingAttached = false;
     this.refreshConfiguration();
+    this.refreshStructure();
     // 质心在箭体内的位置变了：把状态点移到新的质心上（箭体本身没有移动）。
     this.shiftPosition(nose, this.centerOfMassHeight - oldCom);
     this.emit('fairing', -1);
@@ -692,6 +836,9 @@ export class Simulation {
     const dt = this.dt;
     const fm = this.forces;
 
+    this.updateParachute(dt);
+    fm.parachuteArea = this.parachuteArea;
+
     // 姿态（算子分裂）：先转半步，用中点姿态做平动积分，再转后半步。
     this.omega = respondBodyRate(this.omega, this.bodyRateCommand(), dt, ATTITUDE_CONTROL.timeConstant);
     const midAttitude = integrateAttitude(this.attitude, this.omega, dt / 2);
@@ -749,11 +896,18 @@ export class Simulation {
       fm.massFlow = 0;
     }
     fm.evaluate(this.r, this.v);
-    const drag = Math.hypot(fm.dragX, fm.dragY, fm.dragZ);
+    // 气动力分解：阻力沿来流反方向，其余为升力
+    const airX = this.v.x + OMEGA * this.r.y;
+    const airY = this.v.y - OMEGA * this.r.x;
+    const airZ = this.v.z;
+    const drag = fm.airspeed > 1e-9 ? -(fm.aeroX * airX + fm.aeroY * airY + fm.aeroZ * airZ) / fm.airspeed : 0;
+    const aeroSquared = fm.aeroX * fm.aeroX + fm.aeroY * fm.aeroY + fm.aeroZ * fm.aeroZ;
+    const lift = Math.sqrt(Math.max(0, aeroSquared - drag * drag));
+    const q = dynamicPressure(fm.atmosphere.density, fm.airspeed);
     this.specificForce = vec3(
-      (fm.thrust * nose.x + fm.dragX) / this.mass,
-      (fm.thrust * nose.y + fm.dragY) / this.mass,
-      (fm.thrust * nose.z + fm.dragZ) / this.mass,
+      (fm.thrust * nose.x + fm.aeroX) / this.mass,
+      (fm.thrust * nose.y + fm.aeroY) / this.mass,
+      (fm.thrust * nose.z + fm.aeroZ) / this.mass,
     );
     this.diagnostics = {
       thrust: fm.thrust,
@@ -763,15 +917,116 @@ export class Simulation {
       airDensity: fm.atmosphere.density,
       airspeed: fm.airspeed,
       mach: fm.mach,
-      dynamicPressure: dynamicPressure(fm.atmosphere.density, fm.airspeed),
+      dynamicPressure: q,
       drag,
-      angleOfAttack: Math.acos(Math.max(-1, Math.min(1, fm.cosAlpha))),
+      lift,
+      angleOfAttack: Math.acos(fm.cosAlpha),
+      bendingLoad: q * Math.sqrt(Math.max(0, 1 - fm.cosAlpha * fm.cosAlpha)),
+      referenceHeatFlux: stagnationHeatFlux(fm.atmosphere.density, fm.airspeed, 1),
     };
+
+    const thermalFailure = this.stepThermal(dt);
     this.updateStats();
+    if (thermalFailure) {
+      this.failInFlight(THERMAL_FAILURE_CAUSE[thermalFailure.failure], thermalFailure.zone);
+      return;
+    }
+    const structuralFailure = this.checkStructure(dt);
+    if (structuralFailure) this.failInFlight(structuralFailure, null);
+  }
+
+  /**
+   * 推进三个热区的热状态（使用步末的大气条件与迎角）。
+   * 返回本步内发生的第一个热失效；没有则为 null。
+   */
+  private stepThermal(dt: number): { zone: ThermalZoneId; failure: ThermalFailure } | null {
+    const fm = this.forces;
+    const { density, temperature } = fm.atmosphere;
+    const sink = environmentTemperature(temperature);
+    let failed: { zone: ThermalZoneId; failure: ThermalFailure } | null = null;
+    for (const { setup, state } of this.thermalZones) {
+      const coldWall = stagnationHeatFlux(density, fm.airspeed, setup.radius) * exposure(setup.zone, fm.cosAlpha);
+      const failure = stepThermalZone(setup.surface, state, coldWall, temperature, fm.airspeed, sink, dt);
+      if (failure && !failed) failed = { zone: setup.zone, failure };
+    }
+    return failed;
+  }
+
+  /**
+   * 结构限值检查：过载、动压、横向气动载荷。连续超限达到 STRUCTURAL_FAILURE_DELAY 才判定解体。
+   */
+  private checkStructure(dt: number): FailureCause | null {
+    const limits = this.structure;
+    const gLoad = length(this.specificForce) / STANDARD_GRAVITY;
+    this.overloadTime = gLoad > limits.maxGLoad ? this.overloadTime + dt : 0;
+    this.pressureTime = this.diagnostics.dynamicPressure > limits.maxDynamicPressure ? this.pressureTime + dt : 0;
+    this.bendingTime = this.diagnostics.bendingLoad > limits.maxBendingLoad ? this.bendingTime + dt : 0;
+    if (this.overloadTime >= STRUCTURAL_FAILURE_DELAY) return 'overload';
+    if (this.pressureTime >= STRUCTURAL_FAILURE_DELAY) return 'dynamic-pressure';
+    if (this.bendingTime >= STRUCTURAL_FAILURE_DELAY) return 'bending';
+    return null;
+  }
+
+  /**
+   * 降落伞的阶段推进与阻力面积。
+   *   减速伞：充气时间内面积线性增加；张满且动压低于主伞开伞值后转入主伞阶段；
+   *   主伞：收口分级充气，面积按 (t/T)² 增加（先慢后快，开伞冲击较小）。
+   * 已张开的伞遇到远超设计值的动压会被撕毁，遇到高超声速气流的加热会被烧毁。
+   */
+  private updateParachute(dt: number): void {
+    const chute = this.parachute;
+    if (!chute || (this.parachutePhase !== 'drogue' && this.parachutePhase !== 'main')) {
+      this.parachuteArea = 0;
+      return;
+    }
+    const q = this.diagnostics.dynamicPressure;
+    this.parachuteTimer += dt;
+    // 织物伞衣承受不了高超声速气流的加热（例如在大气层外提前开伞后再入）
+    if (this.diagnostics.referenceHeatFlux > PARACHUTE_HEAT_LIMIT) {
+      this.loseParachute();
+      return;
+    }
+    if (this.parachutePhase === 'drogue') {
+      if (q > DROGUE_OVERLOAD_FACTOR * chute.maxDeployDynamicPressure) {
+        this.loseParachute();
+        return;
+      }
+      const fraction = Math.min(1, this.parachuteTimer / chute.drogueInflationTime);
+      this.parachuteArea = chute.drogueDragArea * fraction;
+      if (fraction >= 1 && q < chute.mainDeployDynamicPressure) {
+        this.parachutePhase = 'main';
+        this.parachuteTimer = 0;
+        this.emit('main-deployed', -1);
+      }
+      return;
+    }
+    if (q > MAIN_OVERLOAD_FACTOR * chute.mainDeployDynamicPressure) {
+      this.loseParachute();
+      return;
+    }
+    const fraction = Math.min(1, this.parachuteTimer / chute.mainInflationTime);
+    this.parachuteArea = chute.drogueDragArea + (chute.mainDragArea - chute.drogueDragArea) * fraction * fraction;
+  }
+
+  private loseParachute(): void {
+    this.parachutePhase = 'lost';
+    this.parachuteArea = 0;
+    this.emit('parachute-failed', -1);
   }
 
   /** 本步的角速度指令：有手动输入时听手动的；否则按自动指向模式转向目标方向；都没有则保持姿态。 */
   private bodyRateCommand(): Vec3 {
+    // 降落伞打开后：返回舱被伞绳拉着，头部（舱顶）指向来流的反方向，不再受操纵。
+    if (this.parachutePhase === 'drogue' || this.parachutePhase === 'main') {
+      this.lastPointing = null;
+      const airX = this.v.x + OMEGA * this.r.y;
+      const airY = this.v.y - OMEGA * this.r.x;
+      const airZ = this.v.z;
+      const speed = Math.hypot(airX, airY, airZ);
+      if (speed < 0.5) return vec3(0, 0, 0);
+      const target = vec3(-airX / speed, -airY / speed, -airZ / speed);
+      return steeringRateCommand(this.attitude, rotate(this.attitude, BODY_X), target, PARACHUTE_ATTITUDE);
+    }
     const input = this.attitudeInput;
     const manual = input.pitch !== 0 || input.yaw !== 0 || input.roll !== 0;
     if (manual || this.attitudeMode === 'manual') {
@@ -812,6 +1067,7 @@ export class Simulation {
     fm.noseY = this.forces.noseY;
     fm.noseZ = this.forces.noseZ;
     fm.pointing = this.attitudeMode;
+    fm.parachuteArea = this.parachuteArea;
     fm.thrustVacuum = 0;
     fm.exitArea = 0;
     fm.massFlow = 0;
@@ -931,31 +1187,69 @@ export class Simulation {
     const verticalSpeed = dot(relative, up);
     const horizontalSpeed = Math.sqrt(Math.max(0, impactSpeed * impactSpeed - verticalSpeed * verticalSpeed));
     const tilt = Math.acos(Math.max(-1, Math.min(1, dot(nose, up))));
+    const limits = this.landingLimits;
     const survivable =
-      Math.abs(verticalSpeed) <= LANDING_LIMITS.verticalSpeed &&
-      horizontalSpeed <= LANDING_LIMITS.horizontalSpeed &&
-      tilt <= LANDING_LIMITS.tilt;
+      Math.abs(verticalSpeed) <= limits.verticalSpeed && horizontalSpeed <= limits.horizontalSpeed && tilt <= limits.tilt;
 
     const theta = earthRotationAngle(this.earthAngleAtEpoch, time);
     const positionEcef = eciToEcef(position, theta);
     const geodetic = ecefToGeodetic(positionEcef);
     this.groundPose = { positionEcef, attitudeEcef: multiply(fromAxisAngle(UNIT_Z, -theta), this.attitude) };
     const kind = survivable ? 'landed' : 'destroyed';
-    this.phase = kind;
-    this.ignited = false;
-    this.attitudeInput = NO_ATTITUDE_INPUT;
-    this.attitudeMode = 'manual';
+    this.endFlight(kind);
     this.outcome = {
       kind,
+      cause: survivable ? null : 'impact',
+      thermalZone: null,
       time,
+      altitude: geodetic.altitude,
       impactSpeed,
       verticalSpeed,
       tilt,
       latitude: geodetic.latitude,
       longitude: geodetic.longitude,
     };
-    this.diagnostics = { ...ZERO_DIAGNOSTICS, ambientPressure: this.forces.atmosphere.pressure, airDensity: this.forces.atmosphere.density };
     this.emit(kind, -1);
+  }
+
+  /**
+   * 空中解体（热失效或结构失效）：飞行结束，状态点留在解体时的位置（随地球转动）。
+   * 解体后的残骸不再模拟。
+   */
+  private failInFlight(cause: FailureCause, thermalZone: ThermalZoneId | null): void {
+    const position = vec3(this.r.x, this.r.y, this.r.z);
+    const velocity = vec3(this.v.x, this.v.y, this.v.z);
+    const up = normalize(position);
+    const relative = sub(velocity, cross(EARTH_ANGULAR_VELOCITY, position));
+    const time = this.time;
+    const theta = earthRotationAngle(this.earthAngleAtEpoch, time);
+    const positionEcef = eciToEcef(position, theta);
+    const geodetic = ecefToGeodetic(positionEcef);
+    const nose = rotate(this.attitude, BODY_X);
+    this.groundPose = { positionEcef, attitudeEcef: multiply(fromAxisAngle(UNIT_Z, -theta), this.attitude) };
+    this.endFlight('destroyed');
+    this.outcome = {
+      kind: 'destroyed',
+      cause,
+      thermalZone,
+      time,
+      altitude: geodetic.altitude,
+      impactSpeed: length(relative),
+      verticalSpeed: dot(relative, up),
+      tilt: Math.acos(Math.max(-1, Math.min(1, dot(nose, up)))),
+      latitude: geodetic.latitude,
+      longitude: geodetic.longitude,
+    };
+    this.emit('destroyed', -1);
+  }
+
+  private endFlight(kind: 'landed' | 'destroyed'): void {
+    this.phase = kind;
+    this.ignited = false;
+    this.attitudeInput = NO_ATTITUDE_INPUT;
+    this.attitudeMode = 'manual';
+    this.parachuteArea = 0;
+    this.diagnostics = { ...ZERO_DIAGNOSTICS, ambientPressure: this.forces.atmosphere.pressure, airDensity: this.forces.atmosphere.density };
   }
 
   // ───────────────────────────── 分级与分离体 ─────────────────────────────
@@ -974,6 +1268,7 @@ export class Simulation {
 
     state.attached = false;
     this.refreshConfiguration();
+    this.refreshStructure();
 
     // 动量守恒的分离冲量：两者沿箭体轴线以 STAGE_SEPARATION_SPEED 的相对速度分开。
     const total = this.mass + dropped.mass;
@@ -1072,6 +1367,28 @@ export class Simulation {
     this.forces.aero = configurationAero(this.vehicle, this.cfg);
   }
 
+  /**
+   * 结构性的构型变化（分级、抛罩）后，刷新热区归属、结构限值、接地限值与降落伞。
+   * 归属发生变化的热区从环境温度重新开始：新暴露出来的表面此前被别的部件遮挡着。
+   * （被抛掉的级上方那一级的箱壁其实一直暴露在外，这里忽略它在上升段积累的少量温升。）
+   */
+  private refreshStructure(): void {
+    const setups = configurationThermalZones(this.vehicle, this.cfg);
+    this.thermalZones = setups.map((setup) => {
+      const existing = this.thermalZones.find((z) => z.setup.zone === setup.zone);
+      return existing && existing.setup.owner === setup.owner
+        ? { setup, state: existing.state }
+        : { setup, state: createThermalZoneState(setup.surface, this.ambientTemperature) };
+    });
+    this.structure = configurationStructure(this.vehicle, this.cfg);
+    this.landingLimits = configurationLandingLimits(this.vehicle, this.cfg);
+    this.parachute = configurationParachute(this.vehicle, this.cfg);
+    if (this.parachute && this.parachutePhase === 'none') this.parachutePhase = 'stowed';
+    this.overloadTime = 0;
+    this.pressureTime = 0;
+    this.bendingTime = 0;
+  }
+
   private shiftPosition(direction: Vec3, distance: number): void {
     this.r.x += direction.x * distance;
     this.r.y += direction.y * distance;
@@ -1100,6 +1417,11 @@ export class Simulation {
     if (inertialSpeed > s.maxInertialSpeed) s.maxInertialSpeed = inertialSpeed;
     if (gLoad > s.maxGLoad) s.maxGLoad = gLoad;
     if (this.diagnostics.dynamicPressure > s.maxDynamicPressure) s.maxDynamicPressure = this.diagnostics.dynamicPressure;
+    for (const { state } of this.thermalZones) {
+      if (state.convectiveFlux > s.maxHeatFlux) s.maxHeatFlux = state.convectiveFlux;
+      if (state.surfaceTemperature > s.maxSurfaceTemperature) s.maxSurfaceTemperature = state.surfaceTemperature;
+      if (state.heatLoad > s.maxHeatLoad) s.maxHeatLoad = state.heatLoad;
+    }
   }
 
   /**

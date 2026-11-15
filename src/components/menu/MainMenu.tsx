@@ -185,7 +185,7 @@ export function MainMenu() {
             </div>
           </div>
           <p className="text-[10px] leading-relaxed text-ink-faint">
-            开发阶段 3 / 7 · 可以发射、入轨、圆化与离轨，带轨道仪表与轨道地图。降落伞与热防护属于阶段四。
+            开发阶段 4 / 7 · 可以发射、入轨、轨道机动、再入并伞降着陆；气动加热、热防护与结构失效已建模。任务系统属于阶段五。
           </p>
         </footer>
       </div>

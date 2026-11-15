@@ -50,6 +50,9 @@ interface DebugState {
       stagePropellant: number[];
       stageAttached: boolean[];
       attitudeMode: string;
+      referenceHeatFlux: number;
+      thermal: { zone: string; material: string; surfaceTemperature: number; heatFlux: number; ablatorFraction: number; margin: number }[];
+      parachute: { phase: string; dragArea: number };
       orbit: null | {
         classification: string;
         apoapsisAltitude: number;
@@ -61,7 +64,17 @@ interface DebugState {
       };
     };
     events: string[];
-    outcome: null | { kind: string; impactSpeed: number; latitude: number; longitude: number; time: number };
+    outcome: null | {
+      kind: string;
+      cause: string | null;
+      thermalZone: string | null;
+      altitude: number;
+      impactSpeed: number;
+      latitude: number;
+      longitude: number;
+      time: number;
+    };
+    stats: null | { maxGLoad: number; maxDynamicPressure: number; maxHeatFlux: number; maxSurfaceTemperature: number };
     predictedImpact: null | { time: number; latitude: number; longitude: number; speed: number };
   };
   debrisCount: number;
@@ -96,9 +109,20 @@ const readState = (page: Page): Promise<DebugState | null> =>
         simRate: sim.simRate,
         telemetry: sim.telemetry,
         events: sim.events.map((e) => e.kind),
+        stats: sim.stats
+          ? {
+              maxGLoad: sim.stats.maxGLoad,
+              maxDynamicPressure: sim.stats.maxDynamicPressure,
+              maxHeatFlux: sim.stats.maxHeatFlux,
+              maxSurfaceTemperature: sim.stats.maxSurfaceTemperature,
+            }
+          : null,
         outcome: sim.outcome
           ? {
               kind: sim.outcome.kind,
+              cause: sim.outcome.cause,
+              thermalZone: sim.outcome.thermalZone,
+              altitude: sim.outcome.altitude,
               impactSpeed: sim.outcome.impactSpeed,
               latitude: sim.outcome.latitude,
               longitude: sim.outcome.longitude,
@@ -112,9 +136,15 @@ const readState = (page: Page): Promise<DebugState | null> =>
     };
   });
 
-/** 递归检查对象中所有数值都是有限的（没有 NaN / Infinity）。 */
+/**
+ * 递归检查对象中所有数值都是有限的（没有 NaN / Infinity）。
+ * 唯一的例外是结构限值里表示"没有这项限制"的 Infinity（返回舱没有横向气动载荷限值）。
+ */
 const collectNonFinite = (value: unknown, path = ''): string[] => {
-  if (typeof value === 'number') return Number.isFinite(value) ? [] : [`${path} = ${value}`];
+  if (typeof value === 'number') {
+    if (Number.isFinite(value)) return [];
+    return value === Infinity && path.endsWith('structure.maxBendingLoad') ? [] : [`${path} = ${value}`];
+  }
   if (value && typeof value === 'object') {
     return Object.entries(value).flatMap(([k, v]) => collectNonFinite(v, path ? `${path}.${k}` : k));
   }
@@ -216,10 +246,23 @@ test.describe('Orbital Frontier 冒烟测试', () => {
     await expect(page.getByTestId('navball')).toBeVisible();
     await expect(page.getByTestId('throttle-value')).toHaveText('100%');
     await expect(page.getByTestId('flight-hint')).toContainText('空格');
-    // 尚未实现的仪表标注阶段而不是显示数值；轨道读数在起飞前不给数值
-    await expect(page.getByTestId('telemetry-panel')).toContainText('阶段四');
+    // 轨道读数在起飞前不给数值
     expect(t.orbit).toBeNull();
     await expect(page.getByTestId('orbit-status')).toHaveCount(0);
+
+    // 热防护面板：发射台上各表面都是环境温度（15 °C），没有加热，风险正常
+    await expect(page.getByTestId('thermal-panel')).toBeVisible();
+    await expect(page.getByTestId('thermal-risk')).toHaveText('正常');
+    await expect(page.getByTestId('readout-surface-temperature')).toHaveText('15');
+    await expect(page.getByTestId('readout-heat-flux')).toHaveText('0.0');
+    expect(t.thermal.map((z) => z.zone)).toEqual(['nose', 'side', 'base']);
+    for (const z of t.thermal) {
+      expect(z.surfaceTemperature).toBeCloseTo(288.15, 1);
+      expect(z.margin).toBe(1);
+    }
+    // 降落伞：带着推进级时不可用
+    expect(t.parachute.phase).toBe('none');
+    await expect(page.getByTestId('parachute-button')).toBeDisabled();
   });
 
   test('暂停与恢复', async ({ page }) => {
@@ -433,7 +476,7 @@ test.describe('Orbital Frontier 冒烟测试', () => {
     await expect.poll(async () => (await readState(page))!.sim.telemetry!.missionTime ?? 0, { timeout: 60_000 }).toBeGreaterThan(4);
 
     await page.keyboard.down('KeyD');
-    await expect.poll(async () => ((await readState(page))!.sim.telemetry!.pitch * 180) / Math.PI, { timeout: 60_000 }).toBeLessThan(80);
+    await expect.poll(async () => ((await readState(page))!.sim.telemetry!.pitch * 180) / Math.PI, { timeout: 60_000 }).toBeLessThan(85);
     await page.keyboard.up('KeyD');
     const tilted = (await readState(page))!.sim.telemetry!;
     expect(tilted.heading).not.toBeNull();
@@ -443,6 +486,9 @@ test.describe('Orbital Frontier 冒烟测试', () => {
     await page.waitForTimeout(1500);
     const held = (await readState(page))!.sim.telemetry!;
     expect(Math.abs(held.pitch - tilted.pitch) * (180 / Math.PI)).toBeLessThan(6);
+    // 之后交给顺行保持：带着迎角一直飞进大动压区，箭体会被横向气动载荷折断（阶段四的结构限值）
+    await page.keyboard.press('KeyR');
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.attitudeMode).toBe('prograde');
 
     // 节流：按钮关机 → 推力为 0；Z 恢复满推力；方向键下调
     await page.getByTestId('throttle-cut').click();
@@ -660,7 +706,7 @@ test.describe('轨道动力学（阶段三）', () => {
     await expect(page.getByTestId('attitude-manual')).toHaveAttribute('aria-pressed', 'true');
   });
 
-  test('逆行点火离轨：出现预测轨迹与预计落点，最终落在预测的位置', async ({ page }) => {
+  test('逆行点火离轨：出现预测轨迹与预计落点，返回舱最终落在预测的位置', async ({ page }) => {
     test.setTimeout(240_000);
     await startApp(page);
     await enterOrbit(page);
@@ -688,6 +734,12 @@ test.describe('轨道动力学（阶段三）', () => {
     await expect.poll(async () => (await readState(page))!.sim.telemetry!.orbit!.periapsisAltitude, { timeout: 60_000 }).toBeLessThan(-150_000);
     await page.keyboard.press('KeyX');
     await expect.poll(async () => (await readState(page))!.sim.telemetry!.thrust).toBe(0);
+    // 分离二级：带着推进级再入会在高空烧毁（发动机舱没有防热设计），只有返回舱能落到地面
+    await expect(page.getByTestId('flight-hint')).toContainText('分离二级');
+    await page.keyboard.press('Space');
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.activeStageIndex).toBe(2);
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.parachute.phase).toBe('stowed');
+    await expect(page.getByTestId('parachute-button')).toBeEnabled();
 
     await expect(page.getByTestId('orbit-status')).toHaveText('亚轨道');
     await expect.poll(async () => (await readState(page))!.sim.predictedImpact, { timeout: 15_000 }).not.toBeNull();
@@ -708,7 +760,7 @@ test.describe('轨道动力学（阶段三）', () => {
     expect(predicted.time - now).toBeGreaterThan(600);
     expect(predicted.time - now).toBeLessThan(2_400);
 
-    // 快进到落地（保持逆行指向）。70 km 以下倍率自动限制在 10×
+    // 快进到落地（保持逆行指向：防热大底朝前）；故意不开伞。再入加热开始后倍率自动限制在 10×
     await page.getByTestId('warp-1000').click();
     await expect.poll(async () => (await readState(page))!.sim.telemetry!.altitude, { timeout: 90_000 }).toBeLessThan(70_000);
     await expect.poll(async () => (await readState(page))!.sim.maxTimeWarp).toBe(10);
@@ -716,6 +768,12 @@ test.describe('轨道动力学（阶段三）', () => {
 
     const state = await expectAllFinite(page);
     const outcome = state.sim.outcome!;
+    // 返回舱扛住了再入，但没有开伞：以上百 m/s 撞击地面
+    expect(outcome.cause).toBe('impact');
+    expect(outcome.impactSpeed).toBeGreaterThan(80);
+    expect(outcome.impactSpeed).toBeLessThan(200);
+    await expect(page.getByTestId('flight-cause')).toHaveText('撞击地面');
+    await expect(page.getByTestId('flight-reasons')).toContainText('降落伞没有打开');
     // 预测是在落地前约 20 分钟、相隔几千公里时做出的
     expect(Math.abs(outcome.time - predicted.time)).toBeLessThan(5);
     const kmPerRad = 6371;
@@ -725,5 +783,165 @@ test.describe('轨道动力学（阶段三）', () => {
     );
     expect(miss).toBeLessThan(10);
     await expect(page.getByTestId('flight-summary')).toBeVisible();
+  });
+});
+
+/** 从近地轨道出发，逆行点火离轨并分离二级：只剩返回舱在一条再入轨道上。 */
+const deorbitCapsule = async (page: Page): Promise<void> => {
+  await enterOrbit(page);
+  await page.keyboard.press('KeyT');
+  await page.getByTestId('warp-10').click();
+  await expect
+    .poll(
+      async () => {
+        const t = (await readState(page))!.sim.telemetry!;
+        return t.heading !== null && t.heading * DEG > 265 && Math.abs(t.pitch) * DEG < 3;
+      },
+      { timeout: 60_000 },
+    )
+    .toBe(true);
+  await page.getByTestId('warp-1').click();
+  await page.keyboard.press('Space');
+  await page.keyboard.press('KeyZ');
+  await expect.poll(async () => (await readState(page))!.sim.telemetry!.orbit!.periapsisAltitude, { timeout: 60_000 }).toBeLessThan(30_000);
+  await page.keyboard.press('KeyX');
+  await expect.poll(async () => (await readState(page))!.sim.telemetry!.thrust).toBe(0);
+  await page.keyboard.press('Space');
+  await expect.poll(async () => (await readState(page))!.sim.telemetry!.activeStageIndex).toBe(2);
+};
+
+test.describe('再入与热防护（阶段四）', () => {
+  test('完整返回：防热大底朝前再入，仪表显示热流与温度，开伞后安全着陆', async ({ page }) => {
+    test.setTimeout(360_000);
+    const problems = await startApp(page);
+    await deorbitCapsule(page);
+    // 逆行保持仍然有效：返回舱的防热大底朝前
+    expect((await readState(page))!.sim.telemetry!.attitudeMode).toBe('retrograde');
+    await expect(page.getByTestId('thermal-zone-base')).toContainText('烧蚀防热层');
+    await expect(page.getByTestId('thermal-zone-base')).toContainText('余 100%');
+
+    await page.getByTestId('warp-1000').click();
+    // 再入加热：热流升到几百 kW/m²，倍率被限制，阶段显示"再入大气层"
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.referenceHeatFlux, { timeout: 120_000 }).toBeGreaterThan(300_000);
+    const heating = await expectAllFinite(page);
+    expect(heating.sim.maxTimeWarp).toBe(10);
+    expect(heating.sim.telemetry!.altitude).toBeGreaterThan(40_000);
+    await expect(page.getByTestId('flight-phase')).toContainText('再入大气层');
+    await expect(page.getByTestId('thermal-subject')).toHaveText('防热大底');
+    const shield = heating.sim.telemetry!.thermal.find((z) => z.zone === 'base')!;
+    expect(shield.heatFlux).toBeGreaterThan(100_000);
+    expect(shield.surfaceTemperature).toBeGreaterThan(900);
+    // 面板上的读数与物理状态一致：热流单位已切到 kW/m² 的三位数
+    const fluxText = await page.getByTestId('readout-heat-flux').innerText();
+    expect(Number(fluxText.replace(/,/g, ''))).toBeGreaterThan(100);
+    await expect(page.getByTestId('thermal-chart')).toBeVisible();
+    await expect(page.getByTestId('flight-hint')).toContainText('再入中');
+
+    // 减速到亚声速后提示开伞
+    await expect(page.getByTestId('flight-hint')).toContainText('已降到亚声速', { timeout: 200_000 });
+    const subsonic = (await readState(page))!.sim.telemetry!;
+    expect(subsonic.mach).toBeLessThan(0.9);
+    expect(subsonic.altitude).toBeLessThan(12_000);
+    expect(subsonic.altitude).toBeGreaterThan(1_500);
+    await page.keyboard.press('KeyG');
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.parachute.phase).toMatch(/drogue|main/);
+    await expect(page.getByTestId('flight-phase')).toContainText('伞降');
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.parachute.phase, { timeout: 60_000 }).toBe('main');
+    await expect(page.getByTestId('parachute-button')).toContainText('主伞');
+    await expectAllFinite(page);
+
+    await expect.poll(async () => (await readState(page))!.sim.outcome?.kind ?? null, { timeout: 200_000 }).toBe('landed');
+    const state = await expectAllFinite(page);
+    const outcome = state.sim.outcome!;
+    expect(outcome.cause).toBeNull();
+    expect(outcome.impactSpeed).toBeGreaterThan(5);
+    expect(outcome.impactSpeed).toBeLessThan(10);
+    const stats = state.sim.stats!;
+    // 弹道再入：峰值过载约 8 g，峰值热流约 0.5 MW/m²，表面达到烧蚀温度 1500 K
+    expect(stats.maxGLoad).toBeGreaterThan(7);
+    expect(stats.maxGLoad).toBeLessThan(10);
+    expect(stats.maxHeatFlux).toBeGreaterThan(350_000);
+    expect(stats.maxHeatFlux).toBeLessThan(800_000);
+    expect(stats.maxSurfaceTemperature).toBe(1_500);
+    // 烧蚀层消耗了一部分
+    const final = state.sim.telemetry!.thermal.find((z) => z.zone === 'base')!;
+    expect(final.ablatorFraction).toBeGreaterThan(0.6);
+    expect(final.ablatorFraction).toBeLessThan(0.95);
+    expect(state.sim.events).toEqual(expect.arrayContaining(['separation', 'drogue-deployed', 'main-deployed', 'landed']));
+
+    await expect(page.getByTestId('flight-outcome')).toHaveText('已着陆');
+    await expect(page.getByTestId('flight-summary')).toContainText('最大热流');
+    await expect(page.getByTestId('flight-summary')).toContainText('1,227 °C');
+    await expect(page.getByTestId('flight-cause')).toHaveCount(0);
+    const hudText = await page.getByTestId('flight-hud').innerText();
+    expect(hudText).not.toMatch(/NaN|Infinity|undefined/);
+    expect(problems).toEqual([]);
+  });
+
+  test('危险的再入：舱顶朝前（没有防热大底保护），在高空烧毁并说明原因', async ({ page }) => {
+    test.setTimeout(240_000);
+    const problems = await startApp(page);
+    await deorbitCapsule(page);
+    // 改成顺行保持：舱顶朝前
+    await page.keyboard.press('KeyR');
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.attitudeMode).toBe('prograde');
+    await page.getByTestId('warp-10').click();
+    await expect
+      .poll(
+        async () => {
+          const t = (await readState(page))!.sim.telemetry!;
+          return t.heading !== null && Math.abs(t.heading * DEG - 100) < 25 && Math.abs(t.pitch) * DEG < 4;
+        },
+        { timeout: 60_000 },
+      )
+      .toBe(true);
+    await page.getByTestId('warp-1000').click();
+    // 进入大气层前界面已经给出警告
+    await expect(page.getByTestId('flight-hint')).toContainText('防热大底没有朝前', { timeout: 120_000 });
+
+    await expect.poll(async () => (await readState(page))!.sim.outcome?.kind ?? null, { timeout: 150_000 }).toBe('destroyed');
+    const state = await expectAllFinite(page);
+    const outcome = state.sim.outcome!;
+    expect(outcome.cause).toBe('thermal-surface');
+    expect(outcome.thermalZone).toBe('nose');
+    // 在 60–100 km 的高空、仍以轨道速度飞行时解体
+    expect(outcome.altitude).toBeGreaterThan(60_000);
+    expect(outcome.altitude).toBeLessThan(100_000);
+    expect(outcome.impactSpeed).toBeGreaterThan(6_500);
+    // 防热大底在背风面，完好无损
+    expect(state.sim.telemetry!.thermal.find((z) => z.zone === 'base')!.ablatorFraction).toBe(1);
+
+    await expect(page.getByTestId('flight-phase')).toContainText('飞行器损毁');
+    await expect(page.getByTestId('flight-outcome')).toHaveText('飞行器损毁');
+    await expect(page.getByTestId('flight-cause')).toHaveText('表面过热');
+    await expect(page.getByTestId('flight-reasons')).toContainText('头部（隔热瓦）的表面温度超过了材料的最高工作温度');
+    await expect(page.getByTestId('flight-reasons')).toContainText('逆行保持');
+    await expect(page.getByTestId('thermal-risk')).toContainText('已失效');
+    // 重新发射后一切复位
+    await page.getByTestId('summary-restart').click();
+    await expect.poll(async () => (await readState(page))!.sim.outcome).toBeNull();
+    await expect(page.getByTestId('thermal-risk')).toHaveText('正常');
+    expect(problems).toEqual([]);
+  });
+
+  test('提前开伞：超声速时按 G，降落伞被撕毁', async ({ page }) => {
+    test.setTimeout(240_000);
+    await startApp(page);
+    await deorbitCapsule(page);
+    await page.getByTestId('warp-1000').click();
+    // 降到 50 km 以下（高超声速，正在减速）就回到 1×，留出足够的时间在超声速时按下开伞
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.altitude, { timeout: 200_000 }).toBeLessThan(50_000);
+    await page.getByTestId('warp-1').click();
+    await expect.poll(async () => (await readState(page))!.sim.timeWarp).toBe(1);
+    const t = (await readState(page))!.sim.telemetry!;
+    expect(t.mach).toBeGreaterThan(1.5);
+    await expect(page.getByTestId('parachute-button')).toHaveAttribute('title', /现在开伞会被撕毁/);
+    await page.getByTestId('parachute-button').click();
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.parachute.phase).toBe('lost');
+    expect((await readState(page))!.sim.events).toContain('parachute-failed');
+    await expect(page.getByTestId('parachute-button')).toContainText('伞已毁');
+    await expect(page.getByTestId('parachute-button')).toBeDisabled();
+    await expect(page.getByTestId('event-log')).toContainText('降落伞被撕毁');
+    await expectAllFinite(page);
   });
 });

@@ -18,6 +18,7 @@ export const FLIGHT_KEY_HINTS: readonly (readonly [string, string])[] = [
   ['Z', '满推力'],
   ['X', '关机'],
   ['F', '抛整流罩'],
+  ['G', '开伞'],
   ['R T', '顺行 / 逆行保持'],
   ['M', '轨道地图'],
 ];
@@ -30,7 +31,7 @@ export const FLIGHT_KEY_HINTS: readonly (readonly [string, string])[] = [
  *   A / D     偏航：头部转向左 / 右（发射台上即向西 / 向东）
  *   Q / E     滚转
  *   ↑ / ↓     增大 / 减小节流；Z 满推力；X 关机
- *   F         抛整流罩
+ *   F         抛整流罩；G 开伞（返回舱）
  *   R / T     顺行 / 逆行保持（再按一次回到手动）
  *   M         轨道地图（再按一次回到跟随视角）
  *   P         暂停；, 与 . 调整时间倍率；1–5 / C 切换视角
@@ -120,6 +121,9 @@ export const useFlightControls = (): void => {
           break;
         case 'KeyF':
           if (!e.repeat) simRuntime.jettisonFairing();
+          break;
+        case 'KeyG':
+          if (!e.repeat) simRuntime.deployParachute();
           break;
         case 'KeyP':
           if (!e.repeat) simRuntime.setPaused(!useSimStore.getState().paused);

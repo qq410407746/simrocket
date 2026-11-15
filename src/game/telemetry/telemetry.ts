@@ -17,8 +17,8 @@ import { gravityMagnitude } from '../physics/gravity/pointMass';
 import { type Vec3, angleBetween, dot, length } from '../physics/math/vec3';
 import { type ConicKind, elementsFromState, timeToApoapsis, timeToPeriapsis } from '../physics/orbital/elements';
 import type { SimSnapshot, SimulationConfig } from '../simulation/types';
-import { remainingDeltaV } from '../vehicles/configuration';
-import type { FlightPhase } from '../vehicles/types';
+import { configurationLandingLimits, configurationParachute, configurationStructure, remainingDeltaV } from '../vehicles/configuration';
+import type { FlightPhase, LandingLimits, ParachuteState, StructuralLimits, ThermalZoneTelemetry } from '../vehicles/types';
 
 /**
  * 轨道的定性分类（按密切轨道的近地点高度）：
@@ -145,7 +145,35 @@ export interface Telemetry {
   readonly attitudeMode: AttitudeMode;
   /** 密切轨道；只在自由飞行中给出，其余阶段为 null。 */
   readonly orbit: OrbitTelemetry | null;
+  /** 气动升力 [N] 与升阻比（没有阻力时为 0）。 */
+  readonly lift: number;
+  readonly liftToDrag: number;
+  /** 横向气动载荷 q·sin α [Pa]。 */
+  readonly bendingLoad: number;
+  /** 参考驻点热流 [W/m²]（1 m 曲率半径、冷壁）：加热环境的强弱。 */
+  readonly referenceHeatFlux: number;
+  /** 三个热区（头部、侧壁、底部）的热状态。 */
+  readonly thermal: readonly ThermalZoneTelemetry[];
+  /** 最危险的热区（热裕度最小）在 thermal 中的下标。 */
+  readonly criticalZone: number;
+  /** 当前构型的结构强度限值（过载、动压、横向气动载荷）与可承受的接地条件。 */
+  readonly structure: StructuralLimits;
+  readonly landingLimits: LandingLimits;
+  readonly parachute: ParachuteState;
+  /** 当前构型带有降落伞时：允许开伞的最大动压 [Pa] 与最大马赫数；没有降落伞时为 null。 */
+  readonly parachuteLimits: { readonly dynamicPressure: number; readonly mach: number } | null;
 }
+
+/** 最危险的热区：热裕度最小的那个；裕度相同时取对流热流最大的。 */
+export const criticalZoneIndex = (zones: readonly ThermalZoneTelemetry[]): number => {
+  let best = 0;
+  zones.forEach((zone, i) => {
+    const current = zones[best];
+    if (!current) return;
+    if (zone.margin < current.margin - 1e-9 || (Math.abs(zone.margin - current.margin) <= 1e-9 && zone.heatFlux > current.heatFlux)) best = i;
+  });
+  return best;
+};
 
 export const deriveTelemetry = (snapshot: SimSnapshot, config: SimulationConfig): Telemetry => {
   const { vehicle } = snapshot;
@@ -159,6 +187,7 @@ export const deriveTelemetry = (snapshot: SimSnapshot, config: SimulationConfig)
   const geodetic = ecefToGeodetic(positionEcef);
   const angles = pointingAngles(attitude, position);
   const localGravity = gravityMagnitude(radius);
+  const chute = configurationParachute(config.vehicle, vehicle);
 
   return {
     simTime: snapshot.simTime,
@@ -195,5 +224,15 @@ export const deriveTelemetry = (snapshot: SimSnapshot, config: SimulationConfig)
     airDensity: vehicle.flight.airDensity,
     attitudeMode: vehicle.attitudeMode,
     orbit: vehicle.phase === 'flight' ? deriveOrbit(position, velocity) : null,
+    lift: vehicle.flight.lift,
+    liftToDrag: vehicle.flight.drag > 1e-6 ? vehicle.flight.lift / vehicle.flight.drag : 0,
+    bendingLoad: vehicle.flight.bendingLoad,
+    referenceHeatFlux: vehicle.flight.referenceHeatFlux,
+    thermal: vehicle.thermal,
+    criticalZone: criticalZoneIndex(vehicle.thermal),
+    structure: configurationStructure(config.vehicle, vehicle),
+    landingLimits: configurationLandingLimits(config.vehicle, vehicle),
+    parachute: vehicle.parachute,
+    parachuteLimits: chute ? { dynamicPressure: chute.maxDeployDynamicPressure, mach: chute.maxDeployMach } : null,
   };
 };

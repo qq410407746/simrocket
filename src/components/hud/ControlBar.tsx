@@ -101,7 +101,7 @@ const stageAction = (t: Telemetry | null, vehicle: VehicleDefinition): StageActi
   return { label: '无后续分级', hint: '', enabled: false, tone: 'normal' };
 };
 
-/** 飞行控制：点火/分级、节流阀、抛整流罩。姿态由键盘控制（见导航球下方的键位说明）。 */
+/** 飞行控制：点火/分级、节流阀、抛整流罩、开伞。姿态由键盘控制（见导航球下方的键位说明）。 */
 function FlightControls() {
   const vehicle = getVehicleOrDefault(useGameStore((s) => s.vehicleId));
   const t = useSimStore((s) => s.telemetry);
@@ -109,6 +109,24 @@ function FlightControls() {
   const active = t?.phase === 'prelaunch' || t?.phase === 'flight';
   const throttle = t?.throttle ?? 1;
   const hasFairing = vehicle.payload.kind === 'satellite';
+  const hasParachute = vehicle.payload.kind === 'capsule' && vehicle.payload.parachute !== null;
+  const chute = t?.parachute.phase ?? 'none';
+  const limits = t?.parachuteLimits ?? null;
+  // 开伞条件：亚声速且动压在限值内；否则伞会被撕毁
+  const chuteSafe = !!t && !!limits && t.dynamicPressure <= limits.dynamicPressure && t.mach <= limits.mach;
+  const chuteLabel = chute === 'drogue' ? '减速伞' : chute === 'main' ? '主伞' : chute === 'lost' ? '伞已毁' : '开伞';
+  const chuteHint =
+    chute === 'none'
+      ? '只有与推进级分离后的返回舱可以开伞'
+      : chute === 'stowed'
+        ? chuteSafe
+          ? '开伞（G）：先放减速伞，动压降低后主伞自动打开'
+          : `开伞（G）。现在开伞会被撕毁：要求马赫数 ≤ ${limits?.mach ?? '—'}、动压 ≤ ${((limits?.dynamicPressure ?? 0) / 1000).toFixed(0)} kPa`
+        : chute === 'drogue'
+          ? '减速伞工作中；动压降低后主伞自动打开'
+          : chute === 'main'
+            ? '主伞已打开'
+            : '降落伞已损毁';
 
   return (
     <div className="panel-frame pointer-events-auto flex items-center gap-2 rounded-lg px-2.5 py-2 backdrop-blur-md" data-testid="flight-controls">
@@ -155,6 +173,18 @@ function FlightControls() {
           testId="fairing-button"
         >
           {t?.fairingAttached === false ? '已抛罩' : '抛罩'}
+        </HudButton>
+      )}
+      {hasParachute && (
+        <HudButton
+          disabled={t?.phase !== 'flight' || chute !== 'stowed'}
+          active={chute === 'drogue' || chute === 'main'}
+          onClick={() => simRuntime.deployParachute()}
+          title={chuteHint}
+          testId="parachute-button"
+          className={chute === 'stowed' && chuteSafe && t.altitude < 12_000 ? '!border-ok !text-ok hover:!bg-ok/15' : chute === 'lost' ? '!text-danger' : ''}
+        >
+          {chuteLabel}
         </HudButton>
       )}
     </div>

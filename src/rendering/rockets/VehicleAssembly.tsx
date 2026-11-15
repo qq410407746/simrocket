@@ -6,6 +6,7 @@ import { activePropulsion, stageAloneMassProperties } from '@/game/vehicles/conf
 import type { VehicleDefinition } from '@/game/vehicles/types';
 import { FRAME_PRIORITY, frameState } from '../core/frameState';
 import { eciOrientationToRender, eciToRenderRelative } from '../core/renderSpace';
+import { incandescence } from '../effects/reentryVisuals';
 import { EnginePlume } from './EnginePlume';
 import { RocketSectionMesh, createRocketMaterials } from './RocketModel';
 import { type RocketSection, buildRocketLayout } from './rocketLayout';
@@ -48,6 +49,10 @@ export function VehicleAssembly({ vehicle }: { vehicle: VehicleDefinition }) {
   useFrame(() => {
     const snapshot = frameState.snapshot;
     const visible = frameState.valid && snapshot !== null;
+    // 防热大底的炽热：自发光颜色取自物理线程算出的大底表面温度
+    const shield = snapshot?.vehicle.thermal.find((zone) => zone.zone === 'base' && zone.ablative);
+    const [glowR, glowG, glowB] = incandescence(shield?.surfaceTemperature ?? 0);
+    materials.heatShield.emissive.setRGB(glowR, glowG, glowB);
     // 当前构型中最低连接分段的底面高度：飞行器"底端"的基准
     let base = 0;
     if (snapshot) {

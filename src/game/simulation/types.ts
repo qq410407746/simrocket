@@ -9,6 +9,7 @@ import type { AttitudeMode } from '../physics/attitude/pointing';
 import type { Geodetic } from '../physics/frames/frames';
 import type { Quat } from '../physics/math/quat';
 import type { Vec3 } from '../physics/math/vec3';
+import type { ThermalZoneId } from '../physics/thermodynamics/heating';
 import type { VehicleDefinition, VehicleState } from '../vehicles/types';
 
 /** 物理积分的固定时间步长 [s]。与渲染帧率无关。 */
@@ -66,20 +67,49 @@ export interface FlightStats {
   readonly maxGLoad: number;
   /** 最大动压 [Pa]。 */
   readonly maxDynamicPressure: number;
+  /** 各热区中出现过的最大对流热流 [W/m²]、最高表面温度 [K]、最大累积热载荷 [J/m²]。 */
+  readonly maxHeatFlux: number;
+  readonly maxSurfaceTemperature: number;
+  readonly maxHeatLoad: number;
 }
+
+/**
+ * 飞行器损毁的原因。
+ *  - impact            接地时超出可承受的速度或姿态
+ *  - thermal-surface   表面温度超过材料的最高工作温度
+ *  - burn-through      烧蚀防热层耗尽
+ *  - thermal-structure 内部结构被热透
+ *  - overload          过载超过结构限值
+ *  - dynamic-pressure  动压超过结构限值
+ *  - bending           带迎角飞行的横向气动载荷超过结构限值
+ */
+export type FailureCause =
+  | 'impact'
+  | 'thermal-surface'
+  | 'burn-through'
+  | 'thermal-structure'
+  | 'overload'
+  | 'dynamic-pressure'
+  | 'bending';
 
 /** 飞行结束时的结果。 */
 export interface FlightOutcome {
   readonly kind: 'landed' | 'destroyed';
+  /** 损毁原因；安全着陆时为 null。 */
+  readonly cause: FailureCause | null;
+  /** 热失效发生在哪个热区；其余情况为 null。 */
+  readonly thermalZone: ThermalZoneId | null;
   /** 结束时刻的模拟时间 [s]。 */
   readonly time: number;
-  /** 接地瞬间相对地面的速度大小 [m/s]。 */
+  /** 结束时的高度 [m]：接地为 0 附近，空中解体为解体高度。 */
+  readonly altitude: number;
+  /** 结束瞬间相对地面的速度大小 [m/s]。 */
   readonly impactSpeed: number;
-  /** 接地瞬间的垂直速度 [m/s]（向上为正）。 */
+  /** 结束瞬间的垂直速度 [m/s]（向上为正）。 */
   readonly verticalSpeed: number;
-  /** 接地瞬间箭体纵轴与当地天向的夹角 [rad]。 */
+  /** 结束瞬间箭体纵轴与当地天向的夹角 [rad]。 */
   readonly tilt: number;
-  /** 落点纬度、经度 [rad]。 */
+  /** 落点（或解体点的星下点）纬度、经度 [rad]。 */
   readonly latitude: number;
   readonly longitude: number;
 }
@@ -139,6 +169,10 @@ export type FlightEventKind =
   | 'separation'
   | 'fairing'
   | 'payload-ignition'
+  /** 减速伞张开、主伞张开、降落伞因开伞条件超限而被撕毁。 */
+  | 'drogue-deployed'
+  | 'main-deployed'
+  | 'parachute-failed'
   | 'landed'
   | 'destroyed';
 
@@ -191,6 +225,8 @@ export type SimCommand =
   /** 执行飞行序列的下一步：点火 → 逐级分离并点燃下一级 → 载荷发动机点火。 */
   | { readonly type: 'stage' }
   | { readonly type: 'jettisonFairing' }
+  /** 开伞：先放出减速伞，动压降低后主伞自动打开。只对已与推进级分离的返回舱有效。 */
+  | { readonly type: 'deployParachute' }
   | { readonly type: 'dispose' };
 
 /** 模拟器 → 主线程。 */

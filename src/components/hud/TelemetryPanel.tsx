@@ -79,11 +79,11 @@ function OrbitSection({ orbit }: { orbit: OrbitTelemetry | null }) {
   );
 }
 
-/** 过载读数的颜色：载人任务通常把持续过载限制在 4–5 g 以内。 */
-const gTone = (g: number): Tone => (g > 6 ? 'danger' : g > 4 ? 'warn' : 'ok');
+/** 过载读数的颜色：超过 4 g 提醒（载人任务通常把持续过载限制在 4–5 g 以内）；接近结构限值时为红色。 */
+const gTone = (g: number, limit: number): Tone => (g > 0.85 * limit ? 'danger' : g > 4 ? 'warn' : 'ok');
 
-/** 动压读数的颜色：典型运载火箭的最大动压为 30–40 kPa。 */
-const qTone = (q: number): Tone => (q > 60_000 ? 'danger' : q > 40_000 ? 'warn' : 'data');
+/** 动压与横向气动载荷读数的颜色：按当前构型结构限值的比例。 */
+const loadTone = (value: number, limit: number, normal: Tone): Tone => (value > 0.85 * limit ? 'danger' : value > 0.5 * limit ? 'warn' : normal);
 
 /** 左侧飞行遥测面板。 */
 export function TelemetryPanel() {
@@ -132,13 +132,20 @@ export function TelemetryPanel() {
       <OrbitSection orbit={t.orbit} />
 
       <SectionLabel>受力与气动</SectionLabel>
-      <Readout label="过载" code="G" value={formatNumber(t.gLoad, 2)} unit="g" tone={gTone(t.gLoad)} testId="readout-gload" />
+      <Readout
+        label="过载"
+        code="G"
+        value={formatNumber(t.gLoad, 2)}
+        unit="g"
+        tone={gTone(t.gLoad, t.structure.maxGLoad)}
+        testId="readout-gload"
+      />
       <Readout
         label="动压"
         code="Q"
         value={dynamicPressure.value}
         unit={dynamicPressure.unit}
-        tone={qTone(t.dynamicPressure)}
+        tone={loadTone(t.dynamicPressure, t.structure.maxDynamicPressure, 'data')}
         testId="readout-dynamic-pressure"
       />
       <Readout label="马赫数" code="M" value={inAir ? formatNumber(t.mach, 2) : '—'} tone="plain" testId="readout-mach" />
@@ -147,11 +154,15 @@ export function TelemetryPanel() {
         code="AoA"
         value={inAir ? formatAngle(t.angleOfAttack) : '—'}
         unit="°"
-        tone={inAir && t.dynamicPressure > 5_000 && t.angleOfAttack > 0.26 ? 'warn' : 'plain'}
+        tone={inAir ? loadTone(t.bendingLoad, t.structure.maxBendingLoad, 'plain') : 'plain'}
       />
-
-      {/* 气动热流与表面温度依赖阶段四的气动热模型：在模型存在之前不显示任何数值 */}
-      <SectionLabel note="阶段四 · 尚未实现">热防护</SectionLabel>
+      <Readout
+        label="升阻比"
+        code="L/D"
+        value={inAir && t.drag > 1 ? formatNumber(t.liftToDrag, 2) : '—'}
+        tone="plain"
+        testId="readout-lift-to-drag"
+      />
     </Panel>
   );
 }

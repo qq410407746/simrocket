@@ -99,6 +99,9 @@ export class SimulationHost {
         case 'jettisonFairing':
           sim?.jettisonFairing();
           break;
+        case 'deployParachute':
+          sim?.deployParachute();
+          break;
         case 'dispose':
           this.simulation = null;
           return;

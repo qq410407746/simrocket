@@ -22,6 +22,7 @@ import type {
   TrajectoryPrediction,
 } from '@/game/simulation/types';
 import { deriveTelemetry } from '@/game/telemetry/telemetry';
+import { ThermalHistory, sampleThermal } from '@/game/telemetry/thermalHistory';
 import type { VehicleDefinition } from '@/game/vehicles/types';
 import type { StartMode } from './gameStore';
 import { SimulationClient } from '@/workers/SimulationClient';
@@ -67,16 +68,22 @@ class SimRuntime {
   earthAngleAtEpoch = 0;
   /** 最新的轨迹预测（非响应式，轨道地图每帧读取）；不适用时为 null。 */
   prediction: TrajectoryPrediction | null = null;
+  /** 热流与温度的时间历程（约每模拟秒一个点，最近 10 分钟），供热防护面板画曲线。 */
+  readonly thermalHistory = new ThermalHistory(600, 1);
 
   private client: SimulationClient | null = null;
   private lastTelemetryMs = -Infinity;
   private lastDiscreteKey = '';
+  /** 待补发的尾随遥测更新的定时器。 */
+  private trailingTelemetry: ReturnType<typeof setTimeout> | null = null;
 
   /** 以给定配置（重新）开始模拟。 */
   start(config: SimulationConfig): void {
     if (!this.client) this.client = new SimulationClient(this.handleEvent);
     this.config = config;
     this.prediction = null;
+    this.thermalHistory.clear();
+    this.cancelTrailingTelemetry();
     this.snapshots.clear();
     this.renderClock.reset();
     this.lastTelemetryMs = -Infinity;
@@ -126,13 +133,41 @@ class SimRuntime {
     this.client?.send({ type: 'jettisonFairing' });
   }
 
+  /** 开伞（减速伞 → 主伞）。 */
+  deployParachute(): void {
+    this.client?.send({ type: 'deployParachute' });
+  }
+
   stop(): void {
     this.client?.dispose();
     this.client = null;
     this.config = null;
     this.prediction = null;
+    this.thermalHistory.clear();
+    this.cancelTrailingTelemetry();
     this.snapshots.clear();
     useSimStore.setState({ ...INITIAL_SIM_STATE });
+  }
+
+  private publishTelemetry(snapshot: SimSnapshot, config: SimulationConfig, now: number): void {
+    this.lastTelemetryMs = now;
+    this.lastDiscreteKey = discreteStateKey(snapshot);
+    useSimStore.setState({
+      status: 'running',
+      telemetry: deriveTelemetry(snapshot, config),
+      paused: snapshot.paused,
+      timeWarp: snapshot.timeWarp,
+      maxTimeWarp: snapshot.maxTimeWarp,
+      simRate: snapshot.simRate,
+      liftoffTime: snapshot.liftoffTime,
+      stats: snapshot.stats,
+      outcome: snapshot.outcome,
+    });
+  }
+
+  private cancelTrailingTelemetry(): void {
+    if (this.trailingTelemetry !== null) clearTimeout(this.trailingTelemetry);
+    this.trailingTelemetry = null;
   }
 
   private readonly handleEvent = (event: SimEvent): void => {
@@ -146,22 +181,20 @@ class SimRuntime {
         const now = performance.now();
         const { snapshot } = event;
         this.snapshots.push(snapshot, now);
+        this.thermalHistory.record(sampleThermal(snapshot.simTime, snapshot.vehicle.thermal));
         const key = discreteStateKey(snapshot);
         const store = useSimStore.getState();
-        if (key !== this.lastDiscreteKey || store.status !== 'running' || now - this.lastTelemetryMs >= TELEMETRY_INTERVAL_MS) {
-          this.lastTelemetryMs = now;
-          this.lastDiscreteKey = key;
-          useSimStore.setState({
-            status: 'running',
-            telemetry: deriveTelemetry(snapshot, config),
-            paused: snapshot.paused,
-            timeWarp: snapshot.timeWarp,
-            maxTimeWarp: snapshot.maxTimeWarp,
-            simRate: snapshot.simRate,
-            liftoffTime: snapshot.liftoffTime,
-            stats: snapshot.stats,
-            outcome: snapshot.outcome,
-          });
+        const elapsed = now - this.lastTelemetryMs;
+        if (key !== this.lastDiscreteKey || store.status !== 'running' || elapsed >= TELEMETRY_INTERVAL_MS) {
+          this.publishTelemetry(snapshot, config, now);
+        } else if (this.trailingTelemetry === null) {
+          // 尾随更新：主线程卡顿后会一口气处理一批积压的快照，它们的到达时刻几乎相同，
+          // 只有第一个（最旧的）能通过上面的节流。稍后用缓冲区里最新的快照补发一次，界面才不会停在旧数据上。
+          this.trailingTelemetry = setTimeout(() => {
+            this.trailingTelemetry = null;
+            const latest = this.snapshots.latest;
+            if (latest && this.config) this.publishTelemetry(latest, this.config, performance.now());
+          }, TELEMETRY_INTERVAL_MS - elapsed);
         }
         break;
       }

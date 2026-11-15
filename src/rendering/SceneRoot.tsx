@@ -6,6 +6,8 @@ import { vehicleHeight } from '@/game/vehicles/analysis';
 import { type GraphicsQuality, useGameStore } from '@/stores/gameStore';
 import { CameraRig } from './cameras/CameraRig';
 import { FrameDriver } from './core/FrameDriver';
+import { Parachute } from './effects/Parachute';
+import { ReentryGlow } from './effects/ReentryGlow';
 import { PerfProbe } from './core/PerfProbe';
 import { Planet } from './earth/Planet';
 import { LaunchSite } from './launchpad/LaunchSite';
@@ -49,6 +51,8 @@ export function SceneRoot() {
         <SceneLighting shadows={shadows} shadowExtent={Math.max(70, vehicleHeight(vehicle) * 1.4)} />
         <LaunchSite site={site} vehicle={vehicle} shadows={shadows} />
         <VehicleAssembly vehicle={vehicle} />
+        <Parachute vehicle={vehicle} />
+        <ReentryGlow vehicle={vehicle} />
         <VehicleMarker />
       </Suspense>
       <OrbitMap />

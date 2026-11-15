@@ -144,7 +144,113 @@ describe('操作提示', () => {
     // 刚过远地点、正在下降
     const falling = flightHint(hud(sim, config), vehicle);
     expect(falling?.tone).toBe('warn');
-    expect(falling?.text).toContain('已过远地点且近地点过低');
+    // 带返回舱的飞行器：这同时也是一条返回轨道，提示两种选择
+    expect(falling?.text).toMatch(/^近地点在大气层内：将再入大气层。准备返回：按 空格 分离二级，按 T 让防热大底朝前；想留在轨道上则顺行点火/);
+
+    // 没有返回舱的飞行器（天顶三号）：只提示挽救轨道
+    const zenith = getVehicleOrDefault('zenith-3');
+    const zenithConfig: SimulationConfig = { vehicle: zenith, site, epochJulianDate, initialState: { ...atApoapsis, separatedStages: 2 } };
+    const satellite = new Simulation(zenithConfig);
+    run(satellite, 25);
+    expect(flightHint(deriveTelemetry(buildSnapshot(satellite, { seq: 0, timeWarp: 1, paused: false, simRate: 1 }), zenithConfig), zenith)?.text).toContain(
+      '已过远地点且近地点过低',
+    );
+  });
+
+  it('返回全程：离轨 → 分离推进级 → 大底朝前 → 再入 → 开伞 → 着陆，各阶段给出对应的提示', () => {
+    const config = configWith(orbitStartState(vehicle, site, epochJulianDate));
+    const sim = new Simulation(config);
+    const seen: string[] = [];
+    const note = () => {
+      const text = hintText(sim, config).replace(/[-−]?\d[\d,.]*/g, '#');
+      if (text && seen[seen.length - 1] !== text) seen.push(text);
+    };
+    const advance = (seconds: number) => {
+      for (let i = 0; i < Math.round(seconds / sim.dt) && sim.flightPhase === 'flight'; i++) {
+        sim.step();
+        if (i % 5 === 0) note();
+      }
+    };
+    // 逆行点火离轨
+    sim.setAttitudeMode('retrograde');
+    advance(40);
+    sim.stage();
+    sim.setThrottle(1);
+    const v0 = Math.hypot(sim.getVehicleState().body.velocity.x, sim.getVehicleState().body.velocity.y, sim.getVehicleState().body.velocity.z);
+    while (v0 - Math.hypot(sim.getVehicleState().body.velocity.x, sim.getVehicleState().body.velocity.y, sim.getVehicleState().body.velocity.z) < 120) sim.step();
+    sim.setThrottle(0);
+    advance(30);
+    // 一直滑行到 140 km 以下才分离二级：先看到"即将再入：分离二级"的警告
+    while (sim.flightPhase === 'flight' && hud(sim, config).altitude > 135_000) advance(5);
+    expect(hintText(sim, config)).toMatch(/^即将再入：按 空格 分离二级/);
+    sim.stage();
+    advance(2);
+    // 故意把舱顶朝前：提示调整姿态
+    sim.setAttitudeMode('prograde');
+    advance(40);
+    expect(hintText(sim, config)).toMatch(/^防热大底没有朝前：按 T 开启逆行保持/);
+    sim.setAttitudeMode('retrograde');
+    advance(40);
+    expect(hintText(sim, config)).toMatch(/^即将再入大气层：保持逆行/);
+    // 再入、减速
+    while (sim.flightPhase === 'flight' && hud(sim, config).altitude > 11_000) advance(2);
+    // 照提示开伞
+    while (sim.flightPhase === 'flight' && !hintText(sim, config).includes('按 G 开伞')) advance(1);
+    expect(hud(sim, config).mach).toBeLessThan(0.9);
+    sim.deployParachute();
+    while (sim.flightPhase === 'flight') advance(5);
+    expect(sim.flightOutcome?.kind).toBe('landed');
+    expect(flightHint(hud(sim, config), vehicle)).toBeNull();
+
+    const order = [
+      '近地点在大气层内：将再入大气层。准备返回',
+      '即将再入：按 空格 分离二级',
+      '防热大底没有朝前',
+      '即将再入大气层：保持逆行',
+      '再入中：保持防热大底朝前',
+      '已降到亚声速',
+      '减速伞工作中',
+      '主伞已张开',
+    ];
+    let cursor = -1;
+    for (const expected of order) {
+      const index = seen.findIndex((text, i) => i > cursor && text.includes(expected));
+      expect(index, `提示"${expected}"应当出现在第 ${cursor} 条之后；实际序列：\n${seen.join('\n')}`).toBeGreaterThan(cursor);
+      cursor = index;
+    }
+  });
+
+  it('降到开伞高度但仍是超声速：提示等待，而不是提示开伞', () => {
+    // 从 20 km 高度以马赫 2 俯冲的返回舱
+    const speed = 600;
+    const position = vec3(EARTH.RADIUS + 11_500, 0, 0);
+    const config = configWith({
+      position,
+      velocity: vec3(-speed, EARTH.ROTATION_RATE * (EARTH.RADIUS + 11_500), 0),
+      attitude: verticalLaunchAttitude(vec3(1, 0, 0)),
+      separatedStages: 2,
+    });
+    const sim = new Simulation(config);
+    run(sim, 0.1);
+    const t = hud(sim, config);
+    expect(t.mach).toBeGreaterThan(1.5);
+    expect(t.parachute.phase).toBe('stowed');
+    expect(hintText(sim, config)).toMatch(/^等速度降到马赫 0.9 以下再开伞（现在马赫 \d\.\d\d）/);
+  });
+
+  it('带迎角穿过大动压区：在箭体折断之前给出警告', () => {
+    const config = configWith();
+    const sim = new Simulation(config);
+    sim.stage();
+    while (hud(sim, config).dynamicPressure < 20_000) sim.step();
+    sim.setAttitudeInput({ pitch: 0, yaw: 1, roll: 0 });
+    let warned = false;
+    while (sim.flightPhase === 'flight' && sim.time < 200) {
+      sim.step();
+      if (hintText(sim, config).includes('横向气动载荷接近结构限值')) warned = true;
+    }
+    expect(warned).toBe(true);
+    expect(sim.flightOutcome?.cause).toBe('bending');
   });
 
   it('离轨后贴近地面下降时给出警告', () => {

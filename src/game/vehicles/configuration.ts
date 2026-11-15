@@ -3,9 +3,20 @@
  * 全部是定义数据 + 构型状态的纯函数，模拟器与界面共用。
  */
 import type { AeroProperties } from '../physics/aerodynamics/drag';
+import { DEG2RAD } from '../physics/constants';
 import { idealDeltaV } from '../physics/propulsion/engine';
+import type { ThermalZoneId } from '../physics/thermodynamics/heating';
+import type { ThermalSurfaceProperties } from '../physics/thermodynamics/thermalZone';
 import { type MassProperties, computeMassProperties, payloadStackHeight } from './analysis';
-import type { EngineDefinition, StageDefinition, StageState, VehicleDefinition } from './types';
+import type {
+  EngineDefinition,
+  LandingLimits,
+  ParachuteDefinition,
+  StageDefinition,
+  StageState,
+  StructuralLimits,
+  VehicleDefinition,
+} from './types';
 
 /** 构型状态：各级的连接情况与推进剂余量。 */
 export interface ConfigurationState {
@@ -153,3 +164,74 @@ export const stageAloneMassProperties = (stage: StageDefinition, propellantMass:
     centerOfMassHeight: mass > 0 ? (stage.dryMass * (length / 2) + propellant * ((fill * length) / 2)) / mass : length / 2,
   };
 };
+
+/** 一个热区当前的归属与参数。 */
+export interface ThermalZoneSetup {
+  readonly zone: ThermalZoneId;
+  /** 承担该热区的部件：'fairing'、'payload' 或 'stage-<下标>'。归属变化时该热区的热状态要重新开始。 */
+  readonly owner: string;
+  /** 计算驻点热流用的曲率半径 [m]。 */
+  readonly radius: number;
+  readonly surface: ThermalSurfaceProperties;
+}
+
+/**
+ * 当前构型的三个热区（头部、侧壁、底部）分别由哪个部件、哪种材料承担。
+ *
+ *  - 头部：整流罩（若还在），否则是载荷的顶部（返回舱舱顶 / 卫星本体）；
+ *  - 侧壁：仍带着推进级时取最低连接级的箱壁（各级材料相同，也是最薄弱的）；只剩载荷时取载荷侧壁；
+ *  - 底部：最低连接级的发动机舱；只剩返回舱时是防热大底。
+ *
+ * 曲率半径：侧壁取箱体半径；推进级底部是平的钝面，取箱体直径作为等效半径。
+ */
+export const configurationThermalZones = (vehicle: VehicleDefinition, config: ConfigurationState): readonly ThermalZoneSetup[] => {
+  const { payload } = vehicle;
+  const index = lowestAttachedStage(config);
+  const stage = vehicle.stages[index];
+
+  const nose: ThermalZoneSetup =
+    payload.kind === 'satellite'
+      ? config.fairingAttached
+        ? { zone: 'nose', owner: 'fairing', radius: payload.fairing.noseRadius, surface: payload.fairing.thermal }
+        : { zone: 'nose', owner: 'payload', radius: payload.geometry.diameter / 2, surface: payload.thermal }
+      : { zone: 'nose', owner: 'payload', radius: payload.apexRadius, surface: payload.thermal.apex };
+
+  if (stage) {
+    const owner = `stage-${index}`;
+    return [
+      nose,
+      { zone: 'side', owner, radius: stage.geometry.diameter / 2, surface: stage.thermal.side },
+      { zone: 'base', owner, radius: stage.geometry.diameter, surface: stage.thermal.base },
+    ];
+  }
+  if (payload.kind === 'capsule') {
+    return [
+      nose,
+      { zone: 'side', owner: 'payload', radius: payload.geometry.diameter / 2, surface: payload.thermal.side },
+      { zone: 'base', owner: 'payload', radius: payload.heatShield.noseRadius, surface: payload.heatShield.surface },
+    ];
+  }
+  const radius = payload.geometry.diameter / 2;
+  return [
+    nose,
+    { zone: 'side', owner: 'payload', radius, surface: payload.thermal },
+    { zone: 'base', owner: 'payload', radius, surface: payload.thermal },
+  ];
+};
+
+/** 当前构型的结构强度限制：带着推进级时用组合体的限值，只剩载荷时用载荷自身的。 */
+export const configurationStructure = (vehicle: VehicleDefinition, config: ConfigurationState): StructuralLimits =>
+  lowestAttachedStage(config) < vehicle.stages.length ? vehicle.structure : vehicle.payload.structure;
+
+/** 当前构型可用的降落伞：只有与所有推进级分离后的返回舱才能开伞。 */
+export const configurationParachute = (vehicle: VehicleDefinition, config: ConfigurationState): ParachuteDefinition | null =>
+  lowestAttachedStage(config) >= vehicle.stages.length && vehicle.payload.kind === 'capsule' ? vehicle.payload.parachute : null;
+
+/** 没有着陆装置的飞行器（火箭箭体、卫星）可承受的接地条件：容限很小。 */
+export const DEFAULT_LANDING_LIMITS: LandingLimits = { verticalSpeed: 4, horizontalSpeed: 2, tilt: 15 * DEG2RAD };
+
+/** 当前构型可承受的接地条件：单独的返回舱用它自己的限值，其余用默认值。 */
+export const configurationLandingLimits = (vehicle: VehicleDefinition, config: ConfigurationState): LandingLimits =>
+  lowestAttachedStage(config) >= vehicle.stages.length && vehicle.payload.kind === 'capsule'
+    ? vehicle.payload.landing
+    : DEFAULT_LANDING_LIMITS;

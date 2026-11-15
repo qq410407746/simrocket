@@ -8,6 +8,8 @@ import {
   formatDistance,
   formatDuration,
   formatForce,
+  formatHeatFlux,
+  formatHeatLoad,
   formatLatitude,
   formatLongitude,
   formatMass,
@@ -15,6 +17,7 @@ import {
   formatNumber,
   formatPressure,
   formatSpeed,
+  formatTemperature,
   formatUtc,
 } from './format';
 
@@ -88,5 +91,18 @@ describe('显示格式化', () => {
     expect(formatDuration(NaN)).toBe('—');
     expect(formatUtc(NaN)).toBe('—');
     expect(formatLatitude(NaN)).toBe('—');
+  });
+  it('热流、温度与热载荷', () => {
+    expect(formatHeatFlux(523_400)).toEqual({ value: '523', unit: 'kW/m²' });
+    expect(formatHeatFlux(8_400)).toEqual({ value: '8.4', unit: 'kW/m²' });
+    expect(formatHeatFlux(1_335_000)).toEqual({ value: '1.34', unit: 'MW/m²' });
+    expect(formatHeatFlux(NaN).value).toBe('—');
+    // 开尔文 → 摄氏度
+    expect(formatTemperature(288.15)).toBe('15');
+    expect(formatTemperature(1_500)).toBe('1,227');
+    expect(formatTemperature(Infinity)).toBe('—');
+    expect(formatHeatLoad(71.3e6)).toBe('71');
+    expect(formatHeatLoad(3.14e6)).toBe('3.1');
+    expect(formatHeatLoad(NaN)).toBe('—');
   });
 });

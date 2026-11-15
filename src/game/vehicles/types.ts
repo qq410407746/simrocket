@@ -10,6 +10,8 @@ import type { AttitudeMode } from '../physics/attitude/pointing';
 import type { Vec3 } from '../physics/math/vec3';
 import type { EnginePerformanceParams } from '../physics/propulsion/engine';
 import type { RigidBodyState } from '../physics/state/types';
+import type { ThermalZoneId } from '../physics/thermodynamics/heating';
+import type { ThermalFailure, ThermalSurfaceProperties } from '../physics/thermodynamics/thermalZone';
 
 /** 发动机型号。 */
 export interface EngineDefinition extends EnginePerformanceParams {
@@ -32,8 +34,8 @@ export interface CylinderGeometry {
 }
 
 /**
- * 气动参数。阻力随马赫数与迎角的变化见 physics/aerodynamics/drag.ts。
- * 升力与气动力矩尚未建模（阶段四）。
+ * 气动参数。阻力、升力随马赫数与迎角的变化见 physics/aerodynamics/drag.ts。
+ * 气动力矩没有建模（姿态为简化的运动学模型）。
  */
 export interface AeroDefinition {
   /** 参考面积 [m²]（最大横截面积）。 */
@@ -59,22 +61,64 @@ export interface StageDefinition {
   readonly engineCount: number;
   readonly geometry: CylinderGeometry;
   readonly aero: AeroDefinition;
+  /** 表面的热学特性：箱体侧壁，以及底部的发动机舱。 */
+  readonly thermal: {
+    readonly side: ThermalSurfaceProperties;
+    readonly base: ThermalSurfaceProperties;
+  };
+}
+
+/** 防热大底：返回舱底部的钝头防热结构。 */
+export interface HeatShieldDefinition {
+  /** 球冠的曲率半径 R_n [m]（决定驻点热流：半径越大热流越低）。 */
+  readonly noseRadius: number;
+  /** 防热材料的热学特性（通常带烧蚀层）。 */
+  readonly surface: ThermalSurfaceProperties;
 }
 
 /**
- * 热防护系统参数（阶段四"气动加热"使用；阶段一仅定义数据，尚无模型消费）。
+ * 结构强度限制。任何一项被超过，飞行器即在空中解体。
+ * 这些是整体性的工程限值，不是逐部件的应力分析。
  */
-export interface HeatShieldDefinition {
-  /** 头部（驻点）曲率半径 R_n [m]。 */
-  readonly noseRadius: number;
-  /** 表面发射率 ε [-]。 */
-  readonly emissivity: number;
-  /** 最高允许表面温度 [K]。 */
-  readonly maxSurfaceTemperature: number;
-  /** 烧蚀材料质量 [kg]。 */
-  readonly ablatorMass: number;
-  /** 有效烧蚀热 [J/kg]。 */
-  readonly heatOfAblation: number;
+export interface StructuralLimits {
+  /** 最大过载 [g]：比力（除引力外的合力 / 质量）的大小。 */
+  readonly maxGLoad: number;
+  /** 最大动压 [Pa]。 */
+  readonly maxDynamicPressure: number;
+  /**
+   * 最大横向气动载荷 q·sin α [Pa]：细长箭体带迎角飞行时的弯曲载荷。
+   * 对来流方向不敏感的外形（返回舱）为 Infinity。
+   */
+  readonly maxBendingLoad: number;
+}
+
+/** 可承受的接地条件。 */
+export interface LandingLimits {
+  /** 最大垂直速度 [m/s]。 */
+  readonly verticalSpeed: number;
+  /** 最大水平速度 [m/s]。 */
+  readonly horizontalSpeed: number;
+  /** 纵轴偏离竖直方向的最大角度 [rad]。 */
+  readonly tilt: number;
+}
+
+/**
+ * 降落伞系统：减速伞 + 主伞，一次开伞指令后自动按顺序工作。
+ * 阻力面积是 C_d·A（已含阻力系数）。
+ */
+export interface ParachuteDefinition {
+  /** 减速伞完全张开后的阻力面积 [m²]。 */
+  readonly drogueDragArea: number;
+  /** 主伞完全张开后的阻力面积 [m²]。 */
+  readonly mainDragArea: number;
+  /** 允许开伞的最大动压 [Pa] 与最大马赫数；超出时伞被撕毁。 */
+  readonly maxDeployDynamicPressure: number;
+  readonly maxDeployMach: number;
+  /** 减速伞张满后，动压降到该值以下时主伞打开 [Pa]。 */
+  readonly mainDeployDynamicPressure: number;
+  /** 减速伞与主伞的充气时间 [s]（主伞收口分级充气的总时间）。 */
+  readonly drogueInflationTime: number;
+  readonly mainInflationTime: number;
 }
 
 interface PayloadBase {
@@ -88,6 +132,8 @@ interface PayloadBase {
   readonly engine: EngineDefinition | null;
   readonly engineCount: number;
   readonly aero: AeroDefinition;
+  /** 载荷单独飞行时的结构强度限制。 */
+  readonly structure: StructuralLimits;
 }
 
 /** 返回舱：钝头锥体 + 底部防热大底。 */
@@ -96,6 +142,17 @@ export interface CapsuleDefinition extends PayloadBase {
   /** 最大直径（防热大底处）[m] 与总高度 [m]。 */
   readonly geometry: CylinderGeometry;
   readonly heatShield: HeatShieldDefinition;
+  /** 舱顶的曲率半径 [m]。 */
+  readonly apexRadius: number;
+  /** 舱顶与侧壁（背风面防热层）的热学特性。 */
+  readonly thermal: {
+    readonly apex: ThermalSurfaceProperties;
+    readonly side: ThermalSurfaceProperties;
+  };
+  /** 降落伞；没有则为 null。 */
+  readonly parachute: ParachuteDefinition | null;
+  /** 返回舱单独接地时可承受的条件。 */
+  readonly landing: LandingLimits;
 }
 
 /** 卫星：位于可抛整流罩内。 */
@@ -103,10 +160,15 @@ export interface SatelliteDefinition extends PayloadBase {
   readonly kind: 'satellite';
   /** 卫星本体包络尺寸。 */
   readonly geometry: CylinderGeometry;
+  /** 卫星本体表面的热学特性（没有防热设计）。 */
+  readonly thermal: ThermalSurfaceProperties;
   readonly fairing: {
     /** 整流罩质量 [kg]（两瓣合计）。 */
     readonly mass: number;
     readonly geometry: CylinderGeometry;
+    /** 罩尖的曲率半径 [m]。 */
+    readonly noseRadius: number;
+    readonly thermal: ThermalSurfaceProperties;
   };
 }
 
@@ -124,6 +186,8 @@ export interface VehicleDefinition {
   readonly stages: readonly StageDefinition[];
   /** 位于最顶端的有效载荷。 */
   readonly payload: PayloadDefinition;
+  /** 带着推进级的组合体的结构强度限制。 */
+  readonly structure: StructuralLimits;
 }
 
 /** 单级的动态状态。 */
@@ -163,10 +227,57 @@ export interface FlightDiagnostics {
   readonly mach: number;
   /** 动压 q = ½ρv² [Pa]。 */
   readonly dynamicPressure: number;
-  /** 气动阻力大小 [N]。 */
+  /** 气动阻力大小 [N]（含降落伞）。 */
   readonly drag: number;
+  /** 气动升力大小 [N]。 */
+  readonly lift: number;
   /** 迎角 [rad]：箭体纵轴与相对来流方向的夹角，范围 [0, π]。 */
   readonly angleOfAttack: number;
+  /** 横向气动载荷 q·sin α [Pa]。 */
+  readonly bendingLoad: number;
+  /** 参考驻点热流 [W/m²]：以 1 m 曲率半径计算的冷壁驻点对流热流（衡量加热环境的强弱，与外形无关）。 */
+  readonly referenceHeatFlux: number;
+}
+
+/** 一个热区的遥测。 */
+export interface ThermalZoneTelemetry {
+  readonly zone: ThermalZoneId;
+  /** 该热区当前由哪个部件承担（'fairing' / 'payload' / 'stage-<下标>'）。 */
+  readonly owner: string;
+  /** 材料名称（显示用）。 */
+  readonly material: string;
+  /** 表面温度、内部结构温度 [K]。 */
+  readonly surfaceTemperature: number;
+  readonly interiorTemperature: number;
+  /** 表面与内部的温度限值 [K]。带烧蚀层时表面限值即烧蚀温度。 */
+  readonly surfaceLimit: number;
+  readonly interiorLimit: number;
+  /** 传入表面的对流热流（热壁）[W/m²]，可为负。 */
+  readonly heatFlux: number;
+  /** 累积热载荷 [J/m²]。 */
+  readonly heatLoad: number;
+  /** 是否带烧蚀层，及其剩余比例 [0, 1]（不带时为 1）。 */
+  readonly ablative: boolean;
+  readonly ablatorFraction: number;
+  /** 热裕度 [0, 1]：0 表示到达失效限值。 */
+  readonly margin: number;
+  readonly failure: ThermalFailure | null;
+}
+
+/**
+ * 降落伞状态。
+ *  - none     该构型没有降落伞（或返回舱尚未与推进级分离）
+ *  - stowed   收拢，尚未开伞
+ *  - drogue   减速伞工作中
+ *  - main     主伞已打开（可能仍在充气）
+ *  - lost     开伞条件超限，伞已被撕毁
+ */
+export type ParachutePhase = 'none' | 'stowed' | 'drogue' | 'main' | 'lost';
+
+export interface ParachuteState {
+  readonly phase: ParachutePhase;
+  /** 当前的降落伞阻力面积 C_d·A [m²]。 */
+  readonly dragArea: number;
 }
 
 /** 飞行器动态状态（模拟器的权威状态）。 */
@@ -199,4 +310,7 @@ export interface VehicleState {
    */
   readonly specificForce: Vec3;
   readonly flight: FlightDiagnostics;
+  /** 三个热区（头部、侧壁、底部）的热状态。 */
+  readonly thermal: readonly ThermalZoneTelemetry[];
+  readonly parachute: ParachuteState;
 }

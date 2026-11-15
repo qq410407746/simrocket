@@ -23,6 +23,12 @@ export const describeEvent = (event: FlightEvent, vehicle: VehicleDefinition): s
       return '整流罩分离';
     case 'payload-ignition':
       return '飞船发动机点火';
+    case 'drogue-deployed':
+      return '减速伞张开';
+    case 'main-deployed':
+      return '主伞张开';
+    case 'parachute-failed':
+      return '降落伞被撕毁';
     case 'landed':
       return '着陆';
     case 'destroyed':
@@ -35,6 +41,9 @@ const TONE: Partial<Record<FlightEvent['kind'], string>> = {
   landed: 'text-ok',
   destroyed: 'text-danger',
   depleted: 'text-warn',
+  'drogue-deployed': 'text-ok',
+  'main-deployed': 'text-ok',
+  'parachute-failed': 'text-danger',
 };
 
 /** 屏幕上方居中的操作提示与最近的飞行事件。 */

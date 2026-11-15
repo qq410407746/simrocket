@@ -115,3 +115,18 @@ export const formatApsis = (metres: number): Formatted => {
   const km = metres / 1000;
   return { value: fixed(km, Math.abs(km) < 10_000 ? 1 : 0), unit: 'km' };
 };
+
+/** 热流：< 1 MW/m² 用 kW/m²，以上用 MW/m²。 */
+export const formatHeatFlux = (wattsPerSquareMetre: number): Formatted => {
+  if (!Number.isFinite(wattsPerSquareMetre)) return { value: PLACEHOLDER, unit: 'kW/m²' };
+  const abs = Math.abs(wattsPerSquareMetre);
+  if (abs < 1e6) return { value: fixed(wattsPerSquareMetre / 1e3, abs < 1e4 ? 1 : 0), unit: 'kW/m²' };
+  return { value: fixed(wattsPerSquareMetre / 1e6, 2), unit: 'MW/m²' };
+};
+
+/** 温度：开尔文 → 摄氏度，取整。 */
+export const formatTemperature = (kelvin: number): string => (Number.isFinite(kelvin) ? fixed(kelvin - 273.15, 0) : PLACEHOLDER);
+
+/** 累积热载荷：MJ/m²。 */
+export const formatHeatLoad = (joulesPerSquareMetre: number): string =>
+  Number.isFinite(joulesPerSquareMetre) ? fixed(joulesPerSquareMetre / 1e6, joulesPerSquareMetre < 1e7 ? 1 : 0) : PLACEHOLDER;

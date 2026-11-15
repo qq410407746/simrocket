@@ -7,6 +7,9 @@ import { useSimStore } from '@/stores/simStore';
 import { formatDuration, formatMissionTime, formatUtc } from '@/utils/format';
 import { HudButton } from '../ui/HudButton';
 
+/** 参考驻点热流超过该值 [W/m²] 时，界面把无动力下降称为"再入"。 */
+const REENTRY_HEAT_FLUX = 50_000;
+
 interface PhaseLabel {
   text: string;
   code: string;
@@ -23,6 +26,12 @@ const phaseLabel = (t: Telemetry | null): PhaseLabel => {
   if (t.phase === 'landed') return { text: '已着陆', code: 'LANDED', tone: 'border-ok/60 text-ok' };
   if (t.phase === 'destroyed') return { text: '飞行器损毁', code: 'LOSS OF VEHICLE', tone: 'border-danger/70 text-danger' };
   if (t.thrust > 0) return { text: '动力飞行', code: 'POWERED FLIGHT', tone: 'border-ok/60 text-ok' };
+  if (t.parachute.phase === 'drogue' || t.parachute.phase === 'main') return { text: '伞降', code: 'PARACHUTE DESCENT', tone: 'border-ok/60 text-ok' };
+  // 再入：无动力、正在下降，且气动加热已经明显，或仍在以超声速穿过大气层
+  if (t.verticalSpeed < 0 && (t.referenceHeatFlux > REENTRY_HEAT_FLUX || (t.altitude < 90_000 && t.mach > 1.2 && t.airDensity > 0))) {
+    return { text: '再入大气层', code: 'REENTRY', tone: 'border-warn/70 text-warn' };
+  }
+  if (t.verticalSpeed < -5 && t.altitude < 40_000) return { text: '下降', code: 'DESCENT', tone: 'border-data/60 text-data' };
   if (t.orbit?.classification === 'orbit') return { text: '在轨滑行', code: 'ON ORBIT', tone: 'border-ok/60 text-ok' };
   if (t.orbit?.classification === 'escape') return { text: '逃逸轨道', code: 'ESCAPE', tone: 'border-data/60 text-data' };
   return { text: '无动力滑行', code: 'COAST', tone: 'border-data/60 text-data' };

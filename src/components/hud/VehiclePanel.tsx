@@ -3,12 +3,12 @@ import { getVehicleOrDefault } from '@/data/vehicles';
 import { analyzeVehicle } from '@/game/vehicles/analysis';
 import { useGameStore } from '@/stores/gameStore';
 import { useSimStore } from '@/stores/simStore';
-import { formatAngle, formatForce, formatMass, formatNumber } from '@/utils/format';
+import { formatForce, formatMass, formatNumber } from '@/utils/format';
 import { Meter } from '../ui/Meter';
 import { Panel, SectionLabel } from '../ui/Panel';
 import { Readout } from '../ui/Readout';
 
-/** 右侧飞行器状态面板：推进、质量、各级推进剂、姿态。 */
+/** 右侧飞行器状态面板：推进、质量、各级推进剂。（俯仰与航向显示在导航球下方。） */
 export function VehiclePanel() {
   const vehicle = getVehicleOrDefault(useGameStore((s) => s.vehicleId));
   const t = useSimStore((s) => s.telemetry);
@@ -87,7 +87,7 @@ export function VehiclePanel() {
           return (
             <li
               key={stage.id}
-              className={`rounded border px-2 py-1.5 ${active ? 'border-data/60 bg-data/5' : 'border-line/60'} ${attached ? '' : 'opacity-45'}`}
+              className={`rounded border px-2 ${attached ? 'py-1.5' : 'py-0.5 opacity-45'} ${active ? 'border-data/60 bg-data/5' : 'border-line/60'}`}
               data-testid={`stage-${index}`}
               data-attached={attached}
             >
@@ -109,10 +109,6 @@ export function VehiclePanel() {
           );
         })}
       </ul>
-
-      <SectionLabel>姿态</SectionLabel>
-      <Readout label="俯仰" code="PITCH" value={formatAngle(t?.pitch ?? null)} unit="°" testId="readout-pitch" />
-      <Readout label="航向" code="HDG" value={formatAngle(t?.heading ?? null)} unit="°" testId="readout-heading" />
     </Panel>
   );
 }
