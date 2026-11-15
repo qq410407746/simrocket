@@ -17,10 +17,18 @@
  *        实际垂直速度比它小 25 m/s 以上 → 抬头一个台阶；大 25 m/s 以上 → 低头一个台阶；
  *   5. 近地点读数达到目标（默认 150 km）时关机。
  *
- * 仅支持向正东发射。它不是游戏内的自动驾驶功能。
+ * 起飞倾斜的方向由 kickHeadingDeg 给出，并取整到键盘能按出来的八个方向之一
+ * （D 向东、W 向北、W + D 向东北……）。之后压低 / 抬高头部用的是同一组键及其反向。
+ *
+ * 给出目标倾角时，上面级飞行中还会用与之垂直的那组键修正航向（"倾角差多少，就把航向偏多少"）：
+ *   每次看仪表，按 倾角偏差 / 0.25° 取整得到想要的航向偏移（以"点按次数"计，最多 8 次），
+ *   与当前已有的偏移比较，点按一次（按住 0.3 s，约 2.4–3.4°）向它靠近一步。偏差消失后航向自然回正。
+ *
+ * 它不是游戏内的自动驾驶功能。
  */
-import { type Telemetry, deriveTelemetry } from '../../telemetry/telemetry';
+import { type KeyCombo, comboForHeading, leftOfCombo } from '../../missions/guidance';
 import { RAD2DEG } from '../../physics/constants';
+import { type Telemetry, deriveTelemetry } from '../../telemetry/telemetry';
 import type { Simulation } from '../Simulation';
 import { buildSnapshot } from '../snapshot';
 import type { SimulationConfig } from '../types';
@@ -28,20 +36,31 @@ import type { SimulationConfig } from '../types';
 export interface HandFlownOptions {
   /** 上面级飞行时瞄准的高度 [m]。 */
   readonly targetAltitude: number;
-  /** 起飞后向东倾斜的角度 [°]。 */
+  /** 起飞后倾斜的角度 [°]。 */
   readonly kickAngleDeg: number;
+  /** 倾斜的方向（航向，从正北起顺时针）[°]；缺省 90 即正东。取整到 45° 的倍数（键盘的八个方向）。 */
+  readonly kickHeadingDeg?: number;
   /** 上面级飞行时两次调整俯仰角之间的间隔 [s]。 */
   readonly decisionInterval?: number;
   /** 每次调整俯仰角的台阶 [°]。 */
   readonly pitchStepDeg?: number;
   /** 近地点达到该高度时关机 [m]。 */
   readonly cutoffPeriapsis?: number;
+  /**
+   * 目标倾角 [rad] 与使倾角增大的转向。给出时，上面级飞行中用航向修正把倾角拉向目标。
+   * 向北飞（升段）时左偏增大倾角，向南飞（降段）时右偏增大倾角。
+   */
+  readonly inclination?: { readonly target: number; readonly increase: 'left' | 'right' };
 }
 
 export type HandFlownStatus = 'ascending' | 'orbit' | 'out-of-propellant' | 'ended';
 
 /** 界面遥测的刷新间隔，以物理步计（0.1 s）。 */
 const HUD_REFRESH_STEPS = 5;
+/** 航向修正：每点按一次按住的界面刷新周期数（0.3 s）、每 0.25° 倾角偏差对应一次点按、最多累积的点按次数。 */
+const YAW_TAP_TICKS = 3;
+const INCLINATION_PER_TAP_DEG = 0.25;
+const MAX_YAW_TAPS = 8;
 
 export class HandFlownPilot {
   private phase: 'vertical' | 'kick' | 'settle' | 'prograde-hold' | 'manual' = 'vertical';
@@ -49,9 +68,17 @@ export class HandFlownPilot {
   private pitchTarget = 90;
   private nextDecision = 0;
   private steps = 0;
+  /** 压低头部用的按键组合（俯仰 / 偏航各为 −1、0 或 1）；抬高头部用它的反向。 */
+  private readonly kickKeys: KeyCombo;
+  /** 航向左偏用的按键组合。 */
+  private readonly leftKeys: KeyCombo;
+  /** 当前累积的航向偏移（点按次数，左偏为正）、正在进行的点按方向与剩余周期。 */
+  private yawTaps = 0;
+  private tapDirection = 0;
+  private tapTicks = 0;
   private readonly sim: Simulation;
   private readonly config: SimulationConfig;
-  private readonly options: Required<HandFlownOptions>;
+  private readonly options: Required<Omit<HandFlownOptions, 'inclination'>> & Pick<HandFlownOptions, 'inclination'>;
 
   /** 飞行中见到的最大动压 [Pa] 与最大过载 [g]（按界面刷新率采样）。 */
   maxDynamicPressure = 0;
@@ -60,7 +87,10 @@ export class HandFlownPilot {
   constructor(sim: Simulation, config: SimulationConfig, options: HandFlownOptions) {
     this.sim = sim;
     this.config = config;
-    this.options = { decisionInterval: 3, pitchStepDeg: 5, cutoffPeriapsis: 150_000, ...options };
+    this.options = { decisionInterval: 3, pitchStepDeg: 5, cutoffPeriapsis: 150_000, kickHeadingDeg: 90, ...options };
+    // 发射台上 W（俯仰 +1）向北、D（偏航 +1）向东
+    this.kickKeys = comboForHeading(this.options.kickHeadingDeg);
+    this.leftKeys = leftOfCombo(this.kickKeys);
   }
 
   /** 玩家在界面上看到的遥测。 */
@@ -114,7 +144,7 @@ export class HandFlownPilot {
       case 'vertical':
         if (t.surfaceSpeed >= 60) {
           this.phase = 'kick';
-          sim.setAttitudeInput({ pitch: 0, yaw: 1, roll: 0 });
+          sim.setAttitudeInput({ pitch: this.kickKeys.pitch, yaw: this.kickKeys.yaw, roll: 0 });
         }
         break;
       case 'kick':
@@ -140,10 +170,28 @@ export class HandFlownPilot {
           if (error > 25) this.pitchTarget += options.pitchStepDeg;
           else if (error < -25) this.pitchTarget -= options.pitchStepDeg;
           this.pitchTarget = Math.max(-10, Math.min(50, this.pitchTarget));
+          // 航向修正：倾角差多少，就把航向偏多少（一次点按靠近一步）
+          const steer = options.inclination;
+          if (steer && t.orbit && this.tapTicks === 0) {
+            const errorDeg = (steer.target - t.orbit.inclination) * RAD2DEG;
+            const wanted = Math.max(-MAX_YAW_TAPS, Math.min(MAX_YAW_TAPS, Math.round(errorDeg / INCLINATION_PER_TAP_DEG))) * (steer.increase === 'left' ? 1 : -1);
+            if (wanted !== this.yawTaps) {
+              this.tapDirection = wanted > this.yawTaps ? 1 : -1;
+              this.yawTaps += this.tapDirection;
+              this.tapTicks = YAW_TAP_TICKS;
+            }
+          }
         }
-        // 按住 A / D，直到导航球的俯仰读数到位（±1°）。向东飞行时 D（偏航 +1）使头部压低
+        // 按住起飞时那组键（或其反向），直到导航球的俯仰读数到位（±1°）。向东飞行时 D（偏航 +1）使头部压低
         const excess = pitch - this.pitchTarget;
-        sim.setAttitudeInput({ pitch: 0, yaw: excess > 1 ? 1 : excess < -1 ? -1 : 0, roll: 0 });
+        const direction = excess > 1 ? 1 : excess < -1 ? -1 : 0;
+        const turn = this.tapTicks > 0 ? this.tapDirection : 0;
+        if (this.tapTicks > 0) this.tapTicks -= 1;
+        sim.setAttitudeInput({
+          pitch: direction * this.kickKeys.pitch + turn * this.leftKeys.pitch,
+          yaw: direction * this.kickKeys.yaw + turn * this.leftKeys.yaw,
+          roll: 0,
+        });
         break;
       }
     }

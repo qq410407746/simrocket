@@ -10,10 +10,8 @@ import type { LaunchSite } from '@/data/launchSites';
 import { launchSiteGeodetic } from '@/data/launchSites';
 import type { AttitudeInput } from '@/game/physics/attitude/attitude';
 import type { AttitudeMode } from '@/game/physics/attitude/pointing';
-import { DEG2RAD } from '@/game/physics/constants';
-import { julianDateForLocalSolarTime } from '@/game/physics/ephemeris/time';
 import { RenderClock, SnapshotBuffer } from '@/game/simulation/interpolation';
-import { canStartInOrbit, orbitStartState } from '@/game/simulation/startConditions';
+import { createFlightConfig } from '@/game/simulation/startConditions';
 import type {
   SimEvent,
   SimSnapshot,
@@ -31,26 +29,8 @@ import { EVENT_LOG_LIMIT, INITIAL_SIM_STATE, useSimStore } from './simStore';
 /** UI 遥测刷新间隔 [ms]。 */
 const TELEMETRY_INTERVAL_MS = 100;
 
-/** 默认发射日期与地方平太阳时：上午的侧向光照下火箭与地表最有层次。 */
-const DEFAULT_LAUNCH_DATE = { year: 2026, month: 4, day: 12 } as const;
-const DEFAULT_LOCAL_SOLAR_HOURS = 9.5;
-
-export const createSimulationConfig = (vehicle: VehicleDefinition, site: LaunchSite, start: StartMode = 'pad'): SimulationConfig => {
-  const epochJulianDate = julianDateForLocalSolarTime(
-    DEFAULT_LAUNCH_DATE.year,
-    DEFAULT_LAUNCH_DATE.month,
-    DEFAULT_LAUNCH_DATE.day,
-    DEFAULT_LOCAL_SOLAR_HOURS,
-    site.longitudeDeg * DEG2RAD,
-  );
-  const geodetic = launchSiteGeodetic(site);
-  return {
-    vehicle,
-    site: geodetic,
-    epochJulianDate,
-    initialState: start === 'orbit' && canStartInOrbit(vehicle) ? orbitStartState(vehicle, geodetic, epochJulianDate) : undefined,
-  };
-};
+export const createSimulationConfig = (vehicle: VehicleDefinition, site: LaunchSite, start: StartMode = 'pad'): SimulationConfig =>
+  createFlightConfig(vehicle, launchSiteGeodetic(site), start);
 
 /** 界面需要立即（而不是等到下一个 100 ms 周期）反映的离散状态。 */
 const discreteStateKey = (s: SimSnapshot): string =>
