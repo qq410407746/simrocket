@@ -1,10 +1,13 @@
 import { useEffect, useRef } from 'react';
 import type { ThermalHistory } from '@/game/telemetry/thermalHistory';
+import { useI18n } from '@/i18n';
+import { dataText } from '@/i18n/dataText';
+import { createTranslator, type Language } from '@/i18n/locale';
 import { simRuntime } from '@/stores/simRuntime';
 import { useSimStore } from '@/stores/simStore';
 import { formatHeatFlux, formatHeatLoad, formatNumber, formatTemperature } from '@/utils/format';
 import { Panel } from '../ui/Panel';
-import { RISK_LABEL, thermalRisk, thermalZoneLabel } from './thermalLabels';
+import { riskLabel, thermalRisk, thermalZoneLabel } from './thermalLabels';
 
 const CHART_WIDTH = 246;
 const CHART_HEIGHT = 46;
@@ -87,42 +90,52 @@ const drawChart = (canvas: HTMLCanvasElement, history: ThermalHistory): { flux: 
   return { flux: fluxScale, temperature: temperatureScale, span };
 };
 
+/** 时间窗的显示文字；语言切换不改变历史采样或绘图频率。 */
+export const thermalHistorySpanLabel = (span: number, language: Language = 'zh'): string => {
+  const t = createTranslator(language);
+  return span >= 120
+    ? t(`最近 ${formatNumber(span / 60, 0)} 分钟`, `Last ${formatNumber(span / 60, 0)} min`)
+    : t(`最近 ${formatNumber(span, 0)} 秒`, `Last ${formatNumber(span, 0)} s`);
+};
+
 /** 热流与温度的时间历程曲线。 */
 function ThermalChart() {
+  const { language, t } = useI18n();
   const canvas = useRef<HTMLCanvasElement>(null);
   const fluxLabel = useRef<HTMLSpanElement>(null);
   const temperatureLabel = useRef<HTMLSpanElement>(null);
   const spanLabel = useRef<HTMLSpanElement>(null);
   // 遥测约 10 Hz 更新一次，以它为节拍检查；只有出现新的采样点（约每模拟秒一个）时才真正重画
   const simTime = useSimStore((s) => s.telemetry?.simTime ?? 0);
-  const drawn = useRef({ time: Number.NaN, length: -1 });
+  const drawn = useRef<{ time: number; length: number; scale: ReturnType<typeof drawChart> }>({ time: Number.NaN, length: -1, scale: null });
 
   useEffect(() => {
     if (!canvas.current) return;
     const history = simRuntime.thermalHistory;
     const latest = history.latest?.time ?? Number.NaN;
-    if (Object.is(drawn.current.time, latest) && drawn.current.length === history.length) return;
-    drawn.current = { time: latest, length: history.length };
-    const scale = drawChart(canvas.current, history);
+    if (!Object.is(drawn.current.time, latest) || drawn.current.length !== history.length) {
+      drawn.current = { time: latest, length: history.length, scale: drawChart(canvas.current, history) };
+    }
+    const scale = drawn.current.scale;
     if (fluxLabel.current) {
       const flux = scale ? formatHeatFlux(scale.flux) : null;
       fluxLabel.current.textContent = flux ? `${flux.value} ${flux.unit}` : '';
     }
     if (temperatureLabel.current) temperatureLabel.current.textContent = scale ? `${formatTemperature(scale.temperature)} °C` : '';
     if (spanLabel.current) {
-      spanLabel.current.textContent = scale ? `最近 ${scale.span >= 120 ? `${formatNumber(scale.span / 60, 0)} 分钟` : `${formatNumber(scale.span, 0)} 秒`}` : '';
+      spanLabel.current.textContent = scale ? thermalHistorySpanLabel(scale.span, language) : '';
     }
-  }, [simTime]);
+  }, [simTime, language]);
 
   return (
     <div className="mt-1.5" data-testid="thermal-chart">
       <div className="flex items-baseline justify-between text-[9px]">
         <span className="text-data">
-          热流 <span className="readout" ref={fluxLabel} />
+          {t('热流', 'Flux')} <span className="readout" ref={fluxLabel} />
         </span>
         <span className="text-ink-faint" ref={spanLabel} />
-        <span className="text-warn" title="橙色：表面温度；灰色：内部温度">
-          温度 <span className="readout" ref={temperatureLabel} />
+        <span className="text-warn" title={t('橙色：表面温度；灰色：内部温度', 'Orange: surface temperature; gray: interior temperature')}>
+          {t('温度', 'Temp')} <span className="readout" ref={temperatureLabel} />
         </span>
       </div>
       <canvas
@@ -130,7 +143,7 @@ function ThermalChart() {
         style={{ width: CHART_WIDTH, height: CHART_HEIGHT }}
         className="mt-px block rounded-sm bg-void/40"
         role="img"
-        aria-label="热流（青色）、表面温度（橙色）与内部温度（灰色）随时间变化的曲线"
+        aria-label={t('热流（青色）、表面温度（橙色）与内部温度（灰色）随时间变化的曲线', 'Heat flux (cyan), surface temperature (orange) and interior temperature (gray) over time')}
       />
     </div>
   );
@@ -157,6 +170,7 @@ function Cell({ label, unit, value, tone, testId }: { label: string; unit: strin
  * 整体的失效风险，以及热流与温度的时间曲线。全部读数来自物理线程的热模型（physics/thermodynamics）。
  */
 export function ThermalPanel() {
+  const { language, t: tr } = useI18n();
   const t = useSimStore((s) => s.telemetry);
   if (!t || t.thermal.length === 0) return null;
 
@@ -166,31 +180,32 @@ export function ThermalPanel() {
   const hottest = t.thermal.reduce((best, zone) => (zone.heatFlux > best.heatFlux ? zone : best), critical);
   const subject = hottest.heatFlux > 1_000 ? hottest : critical;
   const risk = thermalRisk(critical.margin, critical.failure !== null);
+  const riskInfo = riskLabel(risk, language);
   const flux = formatHeatFlux(Math.max(0, subject.heatFlux));
   const interiorUsed = (subject.interiorTemperature - 288) / Math.max(1, subject.interiorLimit - 288);
 
   return (
-    <Panel title="热防护" code="Thermal" className="w-68" testId="thermal-panel">
-      <div className="flex items-baseline justify-between text-[11px]">
+    <Panel title={tr('热防护', 'Thermal protection')} code={language === 'zh' ? 'Thermal' : undefined} className="w-68" testId="thermal-panel">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-1 text-[11px]">
         <span className="text-ink-dim">
-          {subject.heatFlux > 1_000 ? '受热最强' : '监测部位'} <span className="text-ink" data-testid="thermal-subject">{thermalZoneLabel(subject)}</span>
+          {subject.heatFlux > 1_000 ? tr('受热最强', 'Hottest') : tr('监测部位', 'Monitoring')} <span className="text-ink" data-testid="thermal-subject">{thermalZoneLabel(subject, language)}</span>
         </span>
-        <span className={`font-semibold ${RISK_LABEL[risk].tone}`} data-testid="thermal-risk" title="按热裕度最小的部位评定">
-          {risk === 'nominal' ? RISK_LABEL[risk].text : `${thermalZoneLabel(critical)} ${RISK_LABEL[risk].text}`}
+        <span className={`font-semibold ${riskInfo.tone}`} data-testid="thermal-risk" title={tr('按热裕度最小的部位评定', 'Based on the zone with the smallest thermal margin')}>
+          {risk === 'nominal' ? riskInfo.text : `${thermalZoneLabel(critical, language)} ${riskInfo.text}`}
         </span>
       </div>
 
       <dl className="mt-1.5 grid grid-cols-4 gap-x-2">
-        <Cell label="热流" unit={flux.unit} value={flux.value} tone="text-data" testId="readout-heat-flux" />
-        <Cell label="表面" unit="°C" value={formatTemperature(subject.surfaceTemperature)} tone="text-warn" testId="readout-surface-temperature" />
+        <Cell label={tr('热流', 'Flux')} unit={flux.unit} value={flux.value} tone="text-data" testId="readout-heat-flux" />
+        <Cell label={tr('表面', 'Surface')} unit="°C" value={formatTemperature(subject.surfaceTemperature)} tone="text-warn" testId="readout-surface-temperature" />
         <Cell
-          label="内部"
+          label={tr('内部', 'Interior')}
           unit="°C"
           value={formatTemperature(subject.interiorTemperature)}
           tone={interiorUsed > 0.9 ? 'text-danger' : interiorUsed > 0.7 ? 'text-warn' : 'text-ink'}
           testId="readout-interior-temperature"
         />
-        <Cell label="累积" unit="MJ/m²" value={formatHeatLoad(subject.heatLoad)} tone="text-ink" testId="readout-heat-load" />
+        <Cell label={tr('累积', 'Load')} unit="MJ/m²" value={formatHeatLoad(subject.heatLoad)} tone="text-ink" testId="readout-heat-load" />
       </dl>
 
       <ul className="mt-2 flex flex-col gap-[3px] border-t border-line/60 pt-1.5">
@@ -203,22 +218,22 @@ export function ThermalPanel() {
               key={zone.zone}
               className="text-[11px] leading-tight"
               data-testid={`thermal-zone-${zone.zone}`}
-              title={`${zone.material}：表面限值 ${formatTemperature(zone.surfaceLimit)} °C，内部限值 ${formatTemperature(zone.interiorLimit)} °C`}
+              title={tr(`${zone.material}：表面限值 ${formatTemperature(zone.surfaceLimit)} °C，内部限值 ${formatTemperature(zone.interiorLimit)} °C`, `${dataText(zone.material, language)}: surface limit ${formatTemperature(zone.surfaceLimit)} °C; interior limit ${formatTemperature(zone.interiorLimit)} °C`)}
             >
-              <div className="flex items-baseline justify-between">
+              <div className="flex flex-wrap items-baseline justify-between gap-x-1">
                 <span className={zone === subject ? 'text-ink' : 'text-ink-dim'}>
-                  {thermalZoneLabel(zone)}
-                  <span className="ml-1.5 text-[9px] text-ink-faint">{zone.material}</span>
+                  {thermalZoneLabel(zone, language)}
+                  <span className="ml-1.5 text-[9px] text-ink-faint">{dataText(zone.material, language)}</span>
                 </span>
                 <span className="readout text-[11px] text-ink-dim">
                   {formatTemperature(zone.surfaceTemperature)} °C
-                  {zone.ablative && <span className="ml-1.5 text-data">余 {formatNumber(zone.ablatorFraction * 100, 0)}%</span>}
+                  {zone.ablative && <span className="ml-1.5 text-data">{tr(`余 ${formatNumber(zone.ablatorFraction * 100, 0)}%`, `${formatNumber(zone.ablatorFraction * 100, 0)}% left`)}</span>}
                 </span>
               </div>
               <div
                 className="mt-px h-1 w-full overflow-hidden rounded-full bg-line/70"
                 role="progressbar"
-                aria-label={`${thermalZoneLabel(zone)}热裕度已用`}
+                aria-label={tr(`${thermalZoneLabel(zone)}热裕度已用`, `${thermalZoneLabel(zone, language)} thermal margin used`)}
                 aria-valuenow={Math.round(used * 100)}
                 aria-valuemin={0}
                 aria-valuemax={100}

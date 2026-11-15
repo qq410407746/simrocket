@@ -11,7 +11,7 @@ import { buildSnapshot } from '@/game/simulation/snapshot';
 import { orbitStartState } from '@/game/simulation/startConditions';
 import { HandFlownPilot } from '@/game/simulation/testing/handFlownPilot';
 import type { InitialFlightState, SimulationConfig } from '@/game/simulation/types';
-import { deriveTelemetry } from '@/game/telemetry/telemetry';
+import { type OrbitTelemetry, type Telemetry, deriveTelemetry } from '@/game/telemetry/telemetry';
 import { flightHint } from './flightHints';
 
 const vehicle = getVehicleOrDefault('frontier-1');
@@ -25,6 +25,115 @@ const hintText = (sim: Simulation, config: SimulationConfig): string => flightHi
 const run = (sim: Simulation, seconds: number): void => {
   for (let i = 0; i < Math.round(seconds / sim.dt); i++) sim.step();
 };
+
+const englishConfig = configWith(orbitStartState(vehicle, site, epochJulianDate));
+const englishTelemetry = hud(new Simulation(englishConfig), englishConfig);
+const englishOrbit = englishTelemetry.orbit as OrbitTelemetry;
+const flightTelemetry: Telemetry = {
+  ...englishTelemetry, phase: 'flight', altitude: 80_000, verticalSpeed: 100, surfaceSpeed: 2_000,
+  missionTime: 100, orbit: null, thrust: 100, ignited: true, throttle: 1,
+  bendingLoad: 0, dynamicPressure: 0, referenceHeatFlux: 0, thermal: [], activeStageIndex: 0,
+  stagePropellant: [10, 10], parachute: { phase: 'none', dragArea: 0 }, parachuteLimits: null,
+};
+const suborbital: OrbitTelemetry = { ...englishOrbit, classification: 'suborbital', periapsisAltitude: -200_000, apoapsisAltitude: 200_000, timeToApoapsis: 200 };
+
+describe('English launch and ascent hints', () => {
+  const cases: [string, Partial<Telemetry>, string][] = [
+    ['pad ignition', { phase: 'prelaunch', ignited: false }, 'Space'],
+    ['zero throttle', { phase: 'prelaunch', throttle: 0 }, 'Throttle is 0'],
+    ['low TWR', { phase: 'prelaunch', thrustToWeight: 0.8 }, '0.80'],
+    ['orbital engine activation', { ignited: false, thrust: 0, missionTime: 1, orbit: englishOrbit, activeStageIndex: 1 }, 'Stage 2'],
+    ['burnout', { stagePropellant: [0, 10] }, 'propellant depleted'],
+    ['orbit insertion', { orbit: englishOrbit }, 'X'],
+    ['stable orbit', { orbit: englishOrbit, thrust: 0 }, 'Stable orbit'],
+    ['powered coast', { orbit: suborbital, thrust: 0, remainingDeltaV: 100 }, 'prograde hold (R)'],
+    ['unpowered coast', { orbit: suborbital, thrust: 0, remainingDeltaV: 0 }, 'highest point'],
+    ['bending', { bendingLoad: flightTelemetry.structure.maxBendingLoad }, 'bending'],
+    ['dynamic pressure', { dynamicPressure: flightTelemetry.structure.maxDynamicPressure }, 'Dynamic pressure'],
+    ['overheating material', { thermal: [{ ...englishTelemetry.thermal[0]!, zone: 'side', material: '铝合金箱壁', margin: 0.1, heatFlux: 6_000 }], criticalZone: 0 }, 'Sidewall'],
+    ['upper-stage descent', { orbit: suborbital, activeStageIndex: 1, verticalSpeed: -40 }, 'Descending'],
+    ['upper-stage manual', { orbit: suborbital, activeStageIndex: 1, attitudeMode: 'manual' }, 'pitch'],
+    ['upper-stage automatic', { orbit: suborbital, activeStageIndex: 1, attitudeMode: 'prograde' }, 'Press R'],
+    ['engine shutdown', { throttle: 0 }, 'Z'],
+    ['low altitude descent', { altitude: 15_000, verticalSpeed: -40 }, 'Descending'],
+    ['initial kick', { missionTime: 5, pitch: Math.PI / 2 }, 'east'],
+    ['gravity turn', { altitude: 10_000, pitch: 1.5, attitudeMode: 'manual' }, 'gravity turn'],
+  ];
+  it.each(cases)('translates %s without Han text', (_name, changes, expected) => {
+    const telemetry = { ...flightTelemetry, ...changes };
+    const hint = flightHint(telemetry, vehicle, 'en');
+    expect(hint?.text).toContain(expected);
+    expect(hint?.text).not.toMatch(/\p{Script=Han}/u);
+    expect(hint?.tone).toBe(flightHint(telemetry, vehicle)?.tone);
+    expect(flightHint(telemetry, vehicle, 'zh')).toEqual(flightHint(telemetry, vehicle));
+  });
+
+  it('translates every catalog stage and both post-apoapsis choices', () => {
+    for (const id of ['meteor-s', 'frontier-1', 'zenith-3']) {
+      const craft = getVehicleOrDefault(id);
+      for (let i = 0; i < craft.stages.length; i++) {
+        const depleted = { ...flightTelemetry, activeStageIndex: i, stagePropellant: craft.stages.map(() => 0) };
+        const text = flightHint(depleted, craft, 'en')?.text;
+        expect(text).toContain('propellant depleted');
+        expect(text).not.toMatch(/\p{Script=Han}/u);
+      }
+      for (const remainingDeltaV of [0, 100]) {
+        const falling = { ...flightTelemetry, thrust: 0, orbit: suborbital, verticalSpeed: -10, altitude: 150_000, remainingDeltaV };
+        const text = flightHint(falling, craft, 'en')?.text;
+        expect(text).toContain('atmosphere');
+        expect(text).not.toMatch(/\p{Script=Han}/u);
+      }
+    }
+    const detached = { ...flightTelemetry, activeStageIndex: vehicle.stages.length, thrust: 0, orbit: suborbital, verticalSpeed: -10, altitude: 150_000 };
+    expect(flightHint(detached, vehicle, 'en')?.text).not.toMatch(/\p{Script=Han}/u);
+    expect(flightHint(null, vehicle, 'en')).toBeNull();
+    expect(flightHint({ ...flightTelemetry, phase: 'landed' }, vehicle, 'en')).toBeNull();
+    expect(flightHint({ ...flightTelemetry, phase: 'prelaunch', thrustToWeight: 2 }, vehicle, 'en')).toBeNull();
+    expect(flightHint(flightTelemetry, vehicle, 'en')).toBeNull();
+  });
+});
+
+describe('English return hints', () => {
+  const shield = { ...englishTelemetry.thermal[0]!, zone: 'base' as const, owner: 'payload', material: '烧蚀防热层', ablative: true, ablatorFraction: 0.8, margin: 0.8, heatFlux: 0 };
+  const returning: Telemetry = {
+    ...flightTelemetry, thrust: 0, orbit: suborbital, altitude: 90_000, verticalSpeed: -1_000,
+    activeStageIndex: vehicle.stages.length, angleOfAttack: Math.PI, heatShieldAttached: true,
+    gLoad: 1, thermal: [shield], trimAngle: 0.3,
+  };
+  const limits = { mach: 0.9, dynamicPressure: 12_000 };
+  const cases: [string, Partial<Telemetry>, string][] = [
+    ['early shield jettison', { heatShieldAttached: false, referenceHeatFlux: 20_000 }, 'Heat shield jettisoned'],
+    ['main parachute with shield', { parachute: { phase: 'main', dragArea: 1 }, canJettisonHeatShield: true }, 'press H'],
+    ['main parachute without jettison', { parachute: { phase: 'main', dragArea: 1 }, canJettisonHeatShield: false }, 'landing'],
+    ['drogue parachute', { parachute: { phase: 'drogue', dragArea: 1 } }, 'Drogue'],
+    ['lost parachute', { altitude: 20_000, parachute: { phase: 'lost', dragArea: 0 } }, 'destroyed'],
+    ['safe deployment', { altitude: 10_000, parachute: { phase: 'stowed', dragArea: 0 }, parachuteLimits: limits, mach: 0.8 }, 'press G'],
+    ['urgent deployment', { altitude: 3_000, parachute: { phase: 'stowed', dragArea: 0 }, parachuteLimits: limits, mach: 0.8 }, 'press G'],
+    ['supersonic deployment', { altitude: 10_000, parachute: { phase: 'stowed', dragArea: 0 }, parachuteLimits: limits, mach: 1.5 }, 'Mach 0.9'],
+    ['high pressure deployment', { altitude: 10_000, parachute: { phase: 'stowed', dragArea: 0 }, parachuteLimits: limits, mach: 0.8, dynamicPressure: 15_000 }, 'Mach 0.9'],
+    ['awaiting deployment altitude', { altitude: 20_000, surfaceSpeed: 500, parachute: { phase: 'stowed', dragArea: 0 }, parachuteLimits: limits }, '12 km'],
+    ['attached stage', { activeStageIndex: 1 }, 'Stage 2'],
+    ['wrong attitude with trim', { angleOfAttack: 0 }, 'Y'],
+    ['wrong attitude without trim', { angleOfAttack: 0, trimAngle: 0 }, 'retrograde hold'],
+    ['high G-load', { gLoad: returning.structure.maxGLoad }, 'structural limit'],
+    ['exhausted shield', { thermal: [{ ...shield, margin: 0.1 }] }, '80%'],
+    ['deceleration', { altitude: 40_000 }, 'Decelerating'],
+    ['heated ballistic entry', { referenceHeatFlux: 60_000, attitudeMode: 'retrograde' }, 'Reentry'],
+    ['heated trimmed entry', { referenceHeatFlux: 60_000, attitudeMode: 'trim', bankAngle: Math.PI / 2 }, 'sideways · right'],
+    ['trimmed entry preparation', { attitudeMode: 'trim', bankAngle: -Math.PI / 6 }, 'lift up · left'],
+    ['ballistic entry preparation', { attitudeMode: 'retrograde' }, '4 g'],
+    ['untrimmable entry', { attitudeMode: 'retrograde', trimAngle: 0 }, 'Keep retrograde'],
+    ['missing shield telemetry', { referenceHeatFlux: 60_000, thermal: [] }, 'Keep retrograde'],
+  ];
+  it.each(cases)('translates %s without Han text', (_name, changes, expected) => {
+    const telemetry = { ...returning, ...changes };
+    const hint = flightHint(telemetry, vehicle, 'en');
+    expect(hint?.text).toContain(expected);
+    expect(hint?.text).not.toMatch(/\p{Script=Han}/u);
+    expect(hint?.tone).toBe(flightHint(telemetry, vehicle)?.tone);
+    expect(flightHint(telemetry, vehicle, 'zh')).toEqual(flightHint(telemetry, vehicle));
+  });
+});
 
 describe('操作提示', () => {
   it('没有遥测时不给提示', () => {

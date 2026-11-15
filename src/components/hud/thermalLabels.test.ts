@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import type { FlightOutcome } from '@/game/simulation/types';
-import type { LandingLimits, StructuralLimits } from '@/game/vehicles/types';
-import { PARACHUTE_LABEL, RISK_LABEL, bankLabel, describeOutcome, failureTitle, thermalRisk, thermalZoneLabel } from './thermalLabels';
+import type { FailureCause, FlightOutcome } from '@/game/simulation/types';
+import type { LandingLimits, ParachutePhase, StructuralLimits } from '@/game/vehicles/types';
+import { PARACHUTE_LABEL, RISK_LABEL, bankLabel, describeOutcome, failureTitle, parachuteLabel, riskLabel, thermalRisk, thermalZoneLabel } from './thermalLabels';
 
 const landing: LandingLimits = { verticalSpeed: 10, horizontalSpeed: 8, tilt: Math.PI / 4 };
 const structure: StructuralLimits = { maxGLoad: 14, maxDynamicPressure: 150_000, maxBendingLoad: Infinity };
@@ -31,6 +31,20 @@ describe('热区名称', () => {
   });
 });
 
+describe('English thermal zone labels', () => {
+  it.each([
+    [{ zone: 'nose', owner: 'fairing', ablative: false }, 'Fairing'],
+    [{ zone: 'nose', owner: 'payload', ablative: false }, 'Nose'],
+    [{ zone: 'side', owner: 'stage-1', ablative: false }, 'Sidewall'],
+    [{ zone: 'base', owner: 'stage-1', ablative: false }, 'Base'],
+    [{ zone: 'base', owner: 'payload', ablative: true }, 'Heat shield'],
+    [{ zone: 'base', owner: 'payload-bare', ablative: false }, 'Capsule base'],
+  ] as const)('translates %o without changing the Chinese default', (zone, expected) => {
+    expect(thermalZoneLabel(zone, 'en')).toBe(expected);
+    expect(thermalZoneLabel(zone, 'zh')).toBe(thermalZoneLabel(zone));
+  });
+});
+
 describe('倾侧角的显示', () => {
   const deg = (d: number) => (d * Math.PI) / 180;
   it('给出带符号的角度与升力方向', () => {
@@ -54,6 +68,86 @@ describe('失效风险等级', () => {
     expect(RISK_LABEL.nominal.text).toBe('正常');
     expect(RISK_LABEL.failed.text).toBe('已失效');
     expect(PARACHUTE_LABEL.drogue).toBe('减速伞');
+  });
+});
+
+describe('English thermal status labels', () => {
+  it.each([
+    [0, '0° lift up'], [2, '+2° lift up'], [-2, '−2° lift up'],
+    [30, '+30° lift up · right'], [-30, '−30° lift up · left'],
+    [45, '+45° sideways · right'], [90, '+90° sideways · right'], [-100, '−100° sideways · left'],
+    [135, '+135° sideways · right'], [150, '+150° lift down · right'],
+    [178, '+178° lift down'], [-180, '−180° lift down'], [180, '+180° lift down'],
+  ] as const)('describes bank %d in English', (degrees, expected) => {
+    expect(bankLabel(degrees * Math.PI / 180, 'en')).toBe(expected);
+  });
+
+  it('localizes risk and parachutes without replacing compatibility constants', () => {
+    for (const [risk, english] of [['nominal', 'Nominal'], ['caution', 'Caution'], ['warning', 'Danger'], ['failed', 'Failed']] as const) {
+      expect(riskLabel(risk, 'en')).toEqual({ ...RISK_LABEL[risk], text: english });
+      expect(riskLabel(risk)).toEqual(RISK_LABEL[risk]);
+    }
+    const expected: Record<ParachutePhase, string> = { none: 'None', stowed: 'Stowed', drogue: 'Drogue', main: 'Main', lost: 'Destroyed' };
+    for (const phase of Object.keys(expected) as ParachutePhase[]) {
+      expect(parachuteLabel(phase, 'en')).toBe(expected[phase]);
+      expect(parachuteLabel(phase)).toBe(PARACHUTE_LABEL[phase]);
+    }
+  });
+
+  it.each([
+    ['impact', 'Ground impact'], ['thermal-surface', 'Surface overheating'], ['burn-through', 'Heat shield burn-through'],
+    ['thermal-structure', 'Structural overheating'], ['overload', 'G-load breakup'],
+    ['dynamic-pressure', 'Dynamic-pressure breakup'], ['bending', 'Aerodynamic bending failure'],
+  ] satisfies [FailureCause, string][])('translates failure %s', (cause, expected) => {
+    expect(failureTitle(cause, 'en')).toBe(expected);
+    expect(failureTitle(null, 'en')).toBe('');
+  });
+});
+
+describe('English outcome explanations', () => {
+  it.each([
+    ['thermal-surface', 'maximum operating temperature'], ['burn-through', 'ablative layer'],
+    ['thermal-structure', 'internal structure'], ['overload', '14 g'],
+    ['dynamic-pressure', '150 kPa'], ['bending', 'bending'],
+  ] satisfies [FailureCause, string][])('explains %s without Han text', (cause, expected) => {
+    const reasons = describeOutcome({ ...base, cause, altitude: 83_800, impactSpeed: 7_360 }, { ...context, zoneLabel: '头部', zoneMaterial: '隔热瓦' }, 'en');
+    expect(reasons).toHaveLength(2);
+    expect(reasons.join(' ')).toContain(expected);
+    expect(reasons[0]).toContain('83.8 km');
+    expect(reasons.join(' ')).not.toMatch(/\p{Script=Han}/u);
+    if (cause === 'thermal-surface') {
+      expect(reasons[0]).toContain('Nose');
+      expect(reasons[0]).toContain('Thermal tiles');
+    }
+  });
+
+  it('preserves an explicitly empty material label instead of treating it as missing', () => {
+    const outcome = { ...base, cause: 'thermal-surface' as const };
+    expect(describeOutcome(outcome, { ...context, zoneMaterial: '' })[0]).toContain('表面（）');
+    expect(describeOutcome(outcome, { ...context, zoneMaterial: '' }, 'en')[0]).toContain('Surface ()');
+  });
+
+  it('explains exposed capsule structure and missing thermal context in English', () => {
+    const reasons = describeOutcome({ ...base, cause: 'thermal-surface' }, {
+      ...context, zoneLabel: '舱底', zoneMaterial: '舱底结构（无防热）', heatShieldJettisoned: true,
+    }, 'en');
+    expect(reasons.join(' ')).toContain('main parachute');
+    expect(reasons.join(' ')).toContain('Capsule base');
+    expect(reasons.join(' ')).not.toMatch(/\p{Script=Han}/u);
+    const fallback = describeOutcome({ ...base, cause: 'thermal-surface' }, context, 'en').join(' ');
+    expect(fallback).toContain('Surface');
+    expect(fallback).toContain('no thermal protection');
+    expect(fallback).not.toMatch(/\p{Script=Han}/u);
+  });
+
+  it.each(['stowed', 'lost', 'drogue', 'none', 'main'] as const)('explains impact and %s parachutes in English', (parachute) => {
+    const reasons = describeOutcome({ ...base, cause: null, tilt: 1.2 }, { ...context, parachute }, 'en');
+    expect(reasons[0]).toContain('Vertical touchdown speed');
+    expect(reasons[1]).toContain('Horizontal touchdown speed');
+    expect(reasons[2]).toContain('tilt');
+    expect(reasons.join(' ')).not.toMatch(/\p{Script=Han}/u);
+    expect(reasons).toHaveLength(parachute === 'main' ? 3 : 4);
+    expect(describeOutcome({ ...base, kind: 'landed' }, context, 'en')).toEqual([]);
   });
 });
 

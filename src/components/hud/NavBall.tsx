@@ -6,6 +6,7 @@ import { EARTH, RAD2DEG } from '@/game/physics/constants';
 import { enuBasisAt } from '@/game/physics/frames/frames';
 import { rotate } from '@/game/physics/math/quat';
 import { dot, length, vec3 } from '@/game/physics/math/vec3';
+import { useI18n } from '@/i18n';
 import { frameState } from '@/rendering/core/frameState';
 import { simRuntime } from '@/stores/simRuntime';
 import { useSimStore } from '@/stores/simStore';
@@ -276,30 +277,31 @@ function Ball() {
   );
 }
 
-const MODE_BUTTONS: readonly { mode: AttitudeMode; label: string; hint: string; color: string }[] = [
-  { mode: 'manual', label: '手动', hint: '手动操纵；松开按键后保持当前姿态', color: 'text-ink' },
-  { mode: 'prograde', label: '顺行', hint: '头部保持指向速度方向（R）。低空以相对地面的速度为准，高空以轨道速度为准', color: 'text-[#d7ff3c]' },
-  { mode: 'retrograde', label: '逆行', hint: '头部保持指向速度的反方向（T）：减速、离轨', color: 'text-[#d7ff3c]' },
-  { mode: 'normal', label: '法向', hint: '头部保持指向轨道面法向：改变轨道倾角', color: 'text-[#ff6bd6]' },
-  { mode: 'antinormal', label: '反法向', hint: '头部保持指向轨道面法向的反方向', color: 'text-[#ff6bd6]' },
-  { mode: 'radial-out', label: '径向外', hint: '头部在轨道面内垂直于速度、指向远离地球的一侧', color: 'text-[#4be3ff]' },
-  { mode: 'radial-in', label: '径向内', hint: '头部在轨道面内垂直于速度、指向地球一侧', color: 'text-[#4be3ff]' },
+const MODE_BUTTONS: readonly { mode: AttitudeMode; label: [string, string]; hint: [string, string]; color: string }[] = [
+  { mode: 'manual', label: ['手动', 'Manual'], hint: ['手动操纵；松开按键后保持当前姿态', 'Manual steering; hold the current attitude when keys are released'], color: 'text-ink' },
+  { mode: 'prograde', label: ['顺行', 'Prograde'], hint: ['头部保持指向速度方向（R）。低空以相对地面的速度为准，高空以轨道速度为准', 'Point along velocity (R). Uses surface-relative velocity at low altitude and orbital velocity at high altitude'], color: 'text-[#d7ff3c]' },
+  { mode: 'retrograde', label: ['逆行', 'Retrograde'], hint: ['头部保持指向速度的反方向（T）：减速、离轨', 'Point opposite velocity (T) for braking and deorbit burns'], color: 'text-[#d7ff3c]' },
+  { mode: 'normal', label: ['法向', 'Normal'], hint: ['头部保持指向轨道面法向：改变轨道倾角', 'Point normal to the orbital plane to change inclination'], color: 'text-[#ff6bd6]' },
+  { mode: 'antinormal', label: ['反法向', 'Anti-normal'], hint: ['头部保持指向轨道面法向的反方向', 'Point opposite the orbital plane normal'], color: 'text-[#ff6bd6]' },
+  { mode: 'radial-out', label: ['径向外', 'Radial out'], hint: ['头部在轨道面内垂直于速度、指向远离地球的一侧', 'Point perpendicular to velocity in the orbital plane, away from Earth'], color: 'text-[#4be3ff]' },
+  { mode: 'radial-in', label: ['径向内', 'Radial in'], hint: ['头部在轨道面内垂直于速度、指向地球一侧', 'Point perpendicular to velocity in the orbital plane, toward Earth'], color: 'text-[#4be3ff]' },
   {
     mode: 'trim',
-    label: '配平',
-    hint: '配平再入（Y）：防热大底朝前并保持配平迎角，产生升力、降低过载。Q / E 改变倾侧角（升力的方向）',
+    label: ['配平', 'Trim'],
+    hint: ['配平再入（Y）：防热大底朝前并保持配平迎角，产生升力、降低过载。Q / E 改变倾侧角（升力的方向）', 'Trimmed reentry (Y): heat shield forward at the trim angle of attack to generate lift and reduce g-load. Q / E change bank angle (lift direction)'],
     color: 'text-[#ffb347]',
   },
 ];
 
 /** 自动指向模式选择。 */
 function AttitudeModeBar() {
+  const { t } = useI18n();
   const mode = useSimStore((s) => s.telemetry?.attitudeMode ?? 'manual');
   const flying = useSimStore((s) => s.telemetry?.phase === 'flight');
   const canTrim = useSimStore((s) => (s.telemetry?.trimAngle ?? 0) > 0);
   return (
-    <div className="flex items-center gap-1" data-testid="attitude-modes">
-      <span className="mr-0.5 text-[10px] tracking-[0.14em] text-ink-faint">指向</span>
+    <div className="flex w-full max-w-[500px] flex-wrap items-center justify-center gap-1" data-testid="attitude-modes">
+      <span className="mr-0.5 text-[10px] tracking-[0.14em] text-ink-faint">{t('指向', 'Pointing')}</span>
       {MODE_BUTTONS.map((button) => {
         const active = mode === button.mode;
         return (
@@ -307,18 +309,18 @@ function AttitudeModeBar() {
             key={button.mode}
             type="button"
             disabled={!flying || (button.mode === 'trim' && !canTrim)}
-            title={button.mode === 'trim' && !canTrim ? '配平再入只对已与推进级分离、质心有横向偏移的返回舱有效' : button.hint}
+            title={button.mode === 'trim' && !canTrim ? t('配平再入只对已与推进级分离、质心有横向偏移的返回舱有效', 'Trimmed reentry requires a separated capsule with a laterally offset center of mass') : t(...button.hint)}
             aria-pressed={active}
             data-testid={`attitude-${button.mode}`}
             onClick={(e) => {
               e.currentTarget.blur();
               simRuntime.setAttitudeMode(button.mode);
             }}
-            className={`pointer-events-auto rounded border px-1.5 py-0.5 text-[11px] leading-4 transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+            className={`pointer-events-auto rounded border px-1.5 py-0.5 text-[11px] leading-4 whitespace-nowrap transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
               active ? `border-data bg-data/15 ${button.color}` : 'border-line text-ink-dim hover:border-data-dim hover:text-ink'
             }`}
           >
-            {button.label}
+            {t(...button.label)}
           </button>
         );
       })}
@@ -326,8 +328,26 @@ function AttitudeModeBar() {
   );
 }
 
+/** 只翻译说明文字，不改动键位或飞行指令。 */
+const KEY_ACTION_ENGLISH: Readonly<Record<string, string>> = {
+  '空格': 'Ignite / stage',
+  'W S': 'Pitch',
+  'A D': 'Yaw',
+  'Q E': 'Roll / bank',
+  '↑ ↓': 'Throttle',
+  Z: 'Full thrust',
+  X: 'Cut engines',
+  F: 'Jettison fairing',
+  G: 'Deploy chute',
+  H: 'Jettison shield',
+  'R T': 'Prograde / retrograde hold',
+  Y: 'Trimmed reentry',
+  M: 'Orbit map',
+};
+
 /** 导航球及其下方的姿态读数、指向模式与键位说明。 */
 export function NavBall() {
+  const { language, t } = useI18n();
   const pitch = useSimStore((s) => s.telemetry?.pitch ?? null);
   const heading = useSimStore((s) => s.telemetry?.heading ?? null);
   const altitude = useSimStore((s) => s.telemetry?.altitude ?? 0);
@@ -337,7 +357,7 @@ export function NavBall() {
   const trimAngle = useSimStore((s) => s.telemetry?.trimAngle ?? 0);
 
   return (
-    <div className="pointer-events-none flex flex-col items-center gap-1.5" data-testid="navball">
+    <div className="pointer-events-none flex max-w-full flex-col items-center gap-1.5" data-testid="navball">
       <div className="relative h-40 w-40 rounded-full bg-void shadow-[0_0_0_2px_rgb(28_46_72),0_0_0_5px_rgb(6_12_23/0.9),0_10px_30px_rgb(0_0_0/0.6)]">
         <Canvas
           orthographic
@@ -358,24 +378,24 @@ export function NavBall() {
           </g>
         </svg>
       </div>
-      <div className="panel-frame flex flex-col items-center gap-1.5 rounded-md px-3 py-1.5 backdrop-blur-md">
-        <div className="flex items-center gap-3">
+      <div className="panel-frame flex max-w-full flex-col items-center gap-1.5 rounded-md px-3 py-1.5 backdrop-blur-md">
+        <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1">
           <span className="readout text-[11px] text-ink-dim">
-            俯仰 <span className="text-data" data-testid="navball-pitch">{formatAngle(pitch)}°</span>
+            {t('俯仰', 'Pitch')} <span className="text-data" data-testid="navball-pitch">{formatAngle(pitch)}°</span>
           </span>
           <span className="readout text-[11px] text-ink-dim">
-            航向 <span className="text-data">{heading === null ? '—' : `${String(Math.round(heading * RAD2DEG) % 360).padStart(3, '0')}°`}</span>
+            {t('航向', 'Heading')} <span className="text-data">{heading === null ? '—' : `${String(Math.round(heading * RAD2DEG) % 360).padStart(3, '0')}°`}</span>
           </span>
           {trimming ? (
             <span
               className="readout text-[11px] text-ink-dim"
-              title={`配平迎角 ${formatAngle(trimAngle)}°（由质心偏移决定）。倾侧角 0° 升力向上，±180° 升力向下；Q / E 改变倾侧角`}
+              title={t(`配平迎角 ${formatAngle(trimAngle)}°（由质心偏移决定）。倾侧角 0° 升力向上，±180° 升力向下；Q / E 改变倾侧角`, `Trim AoA ${formatAngle(trimAngle)}° (set by center-of-mass offset). Bank 0°: lift up; ±180°: lift down. Q / E change bank angle`)}
             >
-              倾侧 <span className="text-[#ffb347]" data-testid="navball-bank">{bankLabel(bank)}</span>
+              {t('倾侧', 'Bank')} <span className="text-[#ffb347]" data-testid="navball-bank">{bankLabel(bank, language)}</span>
             </span>
           ) : (
-            <span className="text-[10px] text-ink-faint" title="顺行/逆行的参考速度：低空用相对地面的速度，高空用惯性（轨道）速度">
-              速度参考：{altitude < SURFACE_REFERENCE_ALTITUDE ? '相对地面' : '轨道'}
+            <span className="text-[10px] text-ink-faint" title={t('顺行/逆行的参考速度：低空用相对地面的速度，高空用惯性（轨道）速度', 'Prograde / retrograde reference: surface-relative velocity at low altitude; inertial (orbital) velocity at high altitude')}>
+              {t('速度参考：', 'Ref: ')}{altitude < SURFACE_REFERENCE_ALTITUDE ? t('相对地面', 'Surface') : t('轨道', 'Orbit')}
             </span>
           )}
         </div>
@@ -383,7 +403,7 @@ export function NavBall() {
         <div className={`flex max-w-[500px] flex-wrap justify-center gap-x-2.5 gap-y-0.5 text-[10px] ${active ? 'text-ink-dim' : 'text-ink-faint'}`}>
           {FLIGHT_KEY_HINTS.map(([key, action]) => (
             <span key={key} className="whitespace-nowrap">
-              <kbd className="readout rounded-sm border border-line bg-raised px-1 text-[10px] text-ink">{key}</kbd> {action}
+              <kbd className="readout rounded-sm border border-line bg-raised px-1 text-[10px] text-ink">{key === '空格' ? t('空格', 'Space') : key}</kbd> {t(action, KEY_ACTION_ENGLISH[key] ?? action)}
             </span>
           ))}
         </div>

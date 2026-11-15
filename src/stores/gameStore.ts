@@ -6,6 +6,7 @@ import { persist } from 'zustand/middleware';
 import { DEFAULT_LAUNCH_SITE_ID, findLaunchSite } from '@/data/launchSites';
 import { MISSION_CATALOG, findMission } from '@/data/missions';
 import { DEFAULT_VEHICLE_ID, findVehicle } from '@/data/vehicles';
+import { DEFAULT_LANGUAGE, isLanguage, type Language } from '@/i18n/locale';
 
 export type Screen = 'menu' | 'flight';
 
@@ -28,6 +29,7 @@ interface GameState {
   cameraMode: CameraMode;
   startMode: StartMode;
   quality: GraphicsQuality;
+  language: Language;
   menuTab: MenuTab;
   /** 主菜单任务列表里选中的任务。 */
   selectedMissionId: string;
@@ -47,6 +49,7 @@ interface GameState {
   setCameraMode: (mode: CameraMode) => void;
   setStartMode: (mode: StartMode) => void;
   setQuality: (quality: GraphicsQuality) => void;
+  setLanguage: (language: Language) => void;
 }
 
 export const useGameStore = create<GameState>()(
@@ -58,6 +61,7 @@ export const useGameStore = create<GameState>()(
       cameraMode: 'chase',
       startMode: 'pad',
       quality: 'high',
+      language: DEFAULT_LANGUAGE,
       menuTab: 'missions',
       selectedMissionId: (MISSION_CATALOG[0] as (typeof MISSION_CATALOG)[number]).id,
       missionId: null,
@@ -91,6 +95,9 @@ export const useGameStore = create<GameState>()(
       setCameraMode: (cameraMode) => set({ cameraMode }),
       setStartMode: (startMode) => set({ startMode }),
       setQuality: (quality) => set({ quality }),
+      setLanguage: (language) => {
+        if (isLanguage(language)) set({ language });
+      },
     }),
     {
       name: 'orbital-frontier/game',
@@ -100,6 +107,7 @@ export const useGameStore = create<GameState>()(
         vehicleId: state.vehicleId,
         siteId: state.siteId,
         quality: state.quality,
+        language: state.language,
         menuTab: state.menuTab,
         selectedMissionId: state.selectedMissionId,
       }),
@@ -108,6 +116,7 @@ export const useGameStore = create<GameState>()(
         const saved = (persisted ?? {}) as Partial<GameState>;
         return {
           ...current,
+          language: isLanguage(saved.language) ? saved.language : current.language,
           vehicleId: saved.vehicleId && findVehicle(saved.vehicleId) ? saved.vehicleId : current.vehicleId,
           siteId: saved.siteId && findLaunchSite(saved.siteId) ? saved.siteId : current.siteId,
           quality:

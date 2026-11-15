@@ -4,6 +4,8 @@ import { VEHICLE_CATALOG, getVehicleOrDefault } from '@/data/vehicles';
 import { ORBIT_START_ALTITUDE, canStartInOrbit } from '@/game/simulation/startConditions';
 import { analyzeVehicle } from '@/game/vehicles/analysis';
 import type { VehicleDefinition } from '@/game/vehicles/types';
+import { useI18n } from '@/i18n';
+import { dataText } from '@/i18n/dataText';
 import { useCareerStore } from '@/stores/careerStore';
 import { type GraphicsQuality, type MenuTab, type StartMode, useGameStore } from '@/stores/gameStore';
 import { simRuntime } from '@/stores/simRuntime';
@@ -11,15 +13,16 @@ import { formatMass, formatNumber } from '@/utils/format';
 import { LogbookMenu } from './LogbookMenu';
 import { MissionBriefing, MissionList } from './MissionMenu';
 
-const QUALITY_LABEL: Record<GraphicsQuality, string> = { low: '低', medium: '中', high: '高' };
+const QUALITY_LABEL: Record<GraphicsQuality, readonly [string, string]> = { low: ['低', 'Low'], medium: ['中', 'Medium'], high: ['高', 'High'] };
 
-const TABS: readonly { readonly tab: MenuTab; readonly label: string; readonly hint: string }[] = [
-  { tab: 'missions', label: '任务', hint: '按顺序完成任务：每个任务规定火箭、发射场与目标，飞完给出评分' },
-  { tab: 'sandbox', label: '自由飞行', hint: '自己选择火箭、发射场与出发点，没有目标与评分' },
-  { tab: 'logbook', label: '飞行记录', hint: '最近的飞行与成绩' },
+const TABS: readonly { readonly tab: MenuTab; readonly label: readonly [string, string]; readonly hint: readonly [string, string] }[] = [
+  { tab: 'missions', label: ['任务', 'Missions'], hint: ['按顺序完成任务：每个任务规定火箭、发射场与目标，飞完给出评分', 'Complete missions in sequence, each with a vehicle, launch site, objectives and score.'] },
+  { tab: 'sandbox', label: ['自由飞行', 'Free flight'], hint: ['自己选择火箭、发射场与出发点，没有目标与评分', 'Choose your vehicle, launch site and starting point. No objectives or scoring.'] },
+  { tab: 'logbook', label: ['飞行记录', 'Logbook'], hint: ['最近的飞行与成绩', 'Recent flights and results'] },
 ];
 
 function VehicleCard({ vehicle, selected, onSelect }: { vehicle: VehicleDefinition; selected: boolean; onSelect: () => void }) {
+  const { language, t } = useI18n();
   const perf = useMemo(() => analyzeVehicle(vehicle), [vehicle]);
   const mass = formatMass(perf.liftoffMass);
   return (
@@ -34,28 +37,28 @@ function VehicleCard({ vehicle, selected, onSelect }: { vehicle: VehicleDefiniti
     >
       <div className="flex items-baseline justify-between gap-2">
         <span className="text-[14px] font-semibold text-ink">
-          {vehicle.nameZh}
-          <span className="ml-2 text-[11px] font-normal tracking-wider text-data-dim">{vehicle.name}</span>
+          {language === 'en' ? vehicle.name : vehicle.nameZh}
+          {language === 'zh' && <span className="ml-2 text-[11px] font-normal tracking-wider text-data-dim">{vehicle.name}</span>}
         </span>
-        <span className="text-[10px] text-ink-faint">{vehicle.role}</span>
+        <span className="text-[10px] text-ink-faint">{dataText(vehicle.role, language)}</span>
       </div>
       <dl className="readout mt-1 grid grid-cols-4 gap-x-2 text-[11px]">
         <div>
-          <dt className="text-[9px] tracking-wider text-ink-faint">级数</dt>
+          <dt className="text-[9px] tracking-wider text-ink-faint">{t('级数', 'Stages')}</dt>
           <dd className="text-ink-dim">{vehicle.stages.length}</dd>
         </div>
         <div>
-          <dt className="text-[9px] tracking-wider text-ink-faint">高度</dt>
+          <dt className="text-[9px] tracking-wider text-ink-faint">{t('高度', 'Height')}</dt>
           <dd className="text-ink-dim">{formatNumber(perf.height, 1)} m</dd>
         </div>
         <div>
-          <dt className="text-[9px] tracking-wider text-ink-faint">起飞质量</dt>
+          <dt className="text-[9px] tracking-wider text-ink-faint">{t('起飞质量', 'Liftoff mass')}</dt>
           <dd className="text-ink-dim">
             {mass.value} {mass.unit}
           </dd>
         </div>
         <div>
-          <dt className="text-[9px] tracking-wider text-ink-faint">理想 Δv</dt>
+          <dt className="text-[9px] tracking-wider text-ink-faint">{t('理想 Δv', 'Ideal Δv')}</dt>
           <dd className="text-data">{formatNumber(perf.totalDeltaVVacuum / 1000, 2)} km/s</dd>
         </div>
       </dl>
@@ -65,6 +68,7 @@ function VehicleCard({ vehicle, selected, onSelect }: { vehicle: VehicleDefiniti
 
 /** 自由飞行：选择火箭、发射场与出发点。 */
 function SandboxSetup() {
+  const { language, t } = useI18n();
   const vehicleId = useGameStore((s) => s.vehicleId);
   const siteId = useGameStore((s) => s.siteId);
   const selectVehicle = useGameStore((s) => s.selectVehicle);
@@ -81,18 +85,18 @@ function SandboxSetup() {
   return (
     <>
       <section>
-        <h2 className="mb-2 text-[11px] font-semibold tracking-[0.18em] text-ink-faint">选择火箭</h2>
+        <h2 className="mb-2 text-[11px] font-semibold tracking-[0.18em] text-ink-faint">{t('选择火箭', 'Select vehicle')}</h2>
         <div className="flex flex-col gap-2">
           {VEHICLE_CATALOG.map((v) => (
             <VehicleCard key={v.id} vehicle={v} selected={v.id === vehicleId} onSelect={() => selectVehicle(v.id)} />
           ))}
         </div>
-        <p className="mt-2 text-[11px] leading-relaxed text-ink-dim">{vehicle.description}</p>
+        <p className="mt-2 text-[11px] leading-relaxed text-ink-dim">{dataText(vehicle.description, language)}</p>
       </section>
 
       <section>
-        <h2 className="mb-2 text-[11px] font-semibold tracking-[0.18em] text-ink-faint">选择发射场</h2>
-        <div className="grid grid-cols-3 gap-1">
+        <h2 className="mb-2 text-[11px] font-semibold tracking-[0.18em] text-ink-faint">{t('选择发射场', 'Select launch site')}</h2>
+        <div className={`grid gap-1 ${language === 'en' ? 'grid-cols-2' : 'grid-cols-3'}`}>
           {LAUNCH_SITES.map((s) => {
             const selected = s.id === siteId;
             return (
@@ -106,7 +110,7 @@ function SandboxSetup() {
                   selected ? 'border-data bg-data/10' : 'border-line bg-panel/40 hover:border-data-dim hover:bg-raised/70'
                 }`}
               >
-                <span className="text-[12px] whitespace-nowrap text-ink">{s.nameZh}</span>
+                <span className="text-[12px] whitespace-nowrap text-ink">{language === 'en' ? s.name : s.nameZh}</span>
                 <span className="readout text-[9.5px] whitespace-nowrap text-ink-faint">
                   {Math.abs(s.latitudeDeg).toFixed(1)}°{s.latitudeDeg >= 0 ? 'N' : 'S'}
                 </span>
@@ -115,17 +119,17 @@ function SandboxSetup() {
           })}
         </div>
         <p className="mt-2 text-[11px] leading-relaxed text-ink-dim">
-          <span className="text-ink">{site.region}</span> — {site.note}
+          <span className="text-ink">{dataText(site.region, language)}</span> — {dataText(site.note, language)}
         </p>
       </section>
 
       <section>
-        <h2 className="mb-2 text-[11px] font-semibold tracking-[0.18em] text-ink-faint">出发点</h2>
+        <h2 className="mb-2 text-[11px] font-semibold tracking-[0.18em] text-ink-faint">{t('出发点', 'Starting point')}</h2>
         <div className="grid grid-cols-2 gap-1.5">
           {(
             [
-              ['pad', '发射台', '从地面发射'],
-              ['orbit', `近地轨道 ${ORBIT_START_ALTITUDE / 1000} km`, orbitAvailable ? '跳过上升段，练习轨道机动' : '该火箭无法入轨'],
+              ['pad', t('发射台', 'Launchpad'), t('从地面发射', 'Launch from the ground')],
+              ['orbit', t(`近地轨道 ${ORBIT_START_ALTITUDE / 1000} km`, `Low Earth orbit ${ORBIT_START_ALTITUDE / 1000} km`), orbitAvailable ? t('跳过上升段，练习轨道机动', 'Skip ascent and practice orbital maneuvers') : t('该火箭无法入轨', 'This vehicle cannot reach orbit')],
             ] as const
           ).map(([mode, title, note]) => {
             const selected = effectiveStart === mode;
@@ -160,7 +164,7 @@ function SandboxSetup() {
         data-testid="enter-flight"
         className="rounded-md border border-data bg-data/15 px-4 py-2.5 text-[15px] font-semibold tracking-[0.3em] text-data transition-colors hover:bg-data/25"
       >
-        {effectiveStart === 'orbit' ? '进入轨道' : '进入发射台'}
+        {effectiveStart === 'orbit' ? t('进入轨道', 'Enter orbit') : t('进入发射台', 'Enter launchpad')}
       </button>
     </>
   );
@@ -170,6 +174,8 @@ function SandboxSetup() {
  * 主菜单：任务（列表 + 简报）、自由飞行（选择火箭与发射场）、飞行记录。背景是实时渲染的地球。
  */
 export function MainMenu() {
+  const { language, t } = useI18n();
+  const setLanguage = useGameStore((s) => s.setLanguage);
   const tab = useGameStore((s) => s.menuTab);
   const setTab = useGameStore((s) => s.setMenuTab);
   const quality = useGameStore((s) => s.quality);
@@ -181,13 +187,31 @@ export function MainMenu() {
     <div className="flex h-full items-stretch gap-3 p-4 sm:p-5" data-testid="main-menu">
       <div className="panel-frame scroll-thin pointer-events-auto flex w-full max-w-[440px] shrink-0 flex-col gap-2.5 overflow-y-auto rounded-xl px-5 py-3.5 backdrop-blur-md">
         <header>
-          <p className="text-[10px] tracking-[0.3em] text-data-dim">航天飞行模拟 · SPACEFLIGHT SIMULATION</p>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-[10px] tracking-[0.12em] text-data-dim">{t('航天飞行模拟', 'SPACEFLIGHT SIMULATION')}</p>
+            <div className="flex items-center gap-1" role="group" aria-label={t('语言', 'Language')}>
+              <span className="mr-1 text-[10px] text-ink-faint">{t('语言', 'Language')}</span>
+              {(['zh', 'en'] as const).map((value) => (
+                <button
+                  key={value}
+                  type="button"
+                  lang={value === 'zh' ? 'zh-CN' : 'en'}
+                  onClick={() => setLanguage(value)}
+                  aria-pressed={language === value}
+                  data-testid={`language-${value}`}
+                  className={`rounded border px-2 py-1 text-[11px] transition-colors ${language === value ? 'border-data bg-data/10 text-data' : 'border-line text-ink-dim hover:border-data-dim'}`}
+                >
+                  {value === 'zh' ? '简体中文' : 'English'}
+                </button>
+              ))}
+            </div>
+          </div>
           <h1 className="mt-1 text-[26px] leading-none font-bold tracking-[0.12em] text-ink">ORBITAL FRONTIER</h1>
-          <p className="mt-1 text-[15px] tracking-[0.5em] text-data">轨道边疆</p>
-          <p className="mt-1.5 text-[11px] leading-relaxed text-ink-dim">以真实的轨道动力学与空气动力学为基础：发射、入轨、轨道机动、再入。</p>
+          <p className="mt-1 text-[15px] tracking-[0.5em] text-data">{t('轨道边疆', 'Launch · Orbit · Return')}</p>
+          <p className="mt-1.5 text-[11px] leading-relaxed text-ink-dim">{t('以真实的轨道动力学与空气动力学为基础：发射、入轨、轨道机动、再入。', 'Launch, reach orbit, maneuver and reenter — powered by orbital mechanics and aerodynamics.')}</p>
         </header>
 
-        <nav className="grid grid-cols-3 gap-1" role="tablist" aria-label="主菜单">
+        <nav className="grid grid-cols-3 gap-1" role="tablist" aria-label={t('主菜单', 'Main menu')}>
           {TABS.map((entry) => {
             const selected = tab === entry.tab;
             return (
@@ -196,14 +220,14 @@ export function MainMenu() {
                 type="button"
                 role="tab"
                 aria-selected={selected}
-                title={entry.hint}
+                title={t(...entry.hint)}
                 onClick={() => setTab(entry.tab)}
                 data-testid={`tab-${entry.tab}`}
                 className={`rounded-md border px-2 py-1.5 text-[13px] tracking-widest transition-colors ${
                   selected ? 'border-data bg-data/15 font-semibold text-data' : 'border-line text-ink-dim hover:border-data-dim hover:text-ink'
                 }`}
               >
-                {entry.label}
+                {t(...entry.label)}
               </button>
             );
           })}
@@ -215,7 +239,7 @@ export function MainMenu() {
 
         <footer className="mt-auto flex flex-col gap-2 border-t border-line/60 pt-3">
           <div className="flex items-center justify-between">
-            <span className="text-[11px] text-ink-faint">画质</span>
+            <span className="text-[11px] text-ink-faint">{t('画质', 'Graphics')}</span>
             <div className="flex gap-1">
               {(Object.keys(QUALITY_LABEL) as GraphicsQuality[]).map((q) => (
                 <button
@@ -228,13 +252,13 @@ export function MainMenu() {
                     quality === q ? 'border-data text-data' : 'border-line text-ink-dim hover:border-data-dim'
                   }`}
                 >
-                  {QUALITY_LABEL[q]}
+                  {t(...QUALITY_LABEL[q])}
                 </button>
               ))}
             </div>
           </div>
-          <label className="flex cursor-pointer items-center justify-between text-[11px] text-ink-faint" title="忽略解锁顺序，直接开放全部任务">
-            <span>解锁全部任务</span>
+          <label className="flex cursor-pointer items-center justify-between text-[11px] text-ink-faint" title={t('忽略解锁顺序，直接开放全部任务', 'Make all missions available regardless of progression')}>
+            <span>{t('解锁全部任务', 'Unlock all missions')}</span>
             <input
               type="checkbox"
               checked={unlockAll}
@@ -244,7 +268,7 @@ export function MainMenu() {
             />
           </label>
           <p className="text-[10px] leading-relaxed text-ink-faint">
-            开发阶段 5 / 7 · 七个任务：亚轨道、入轨、指定倾角、极地轨道、载人返回；带评分、教学提示与飞行记录。高级轨道任务（GTO / GEO）属于阶段六。
+            {t('开发阶段 5 / 7 · 七个任务：亚轨道、入轨、指定倾角、极地轨道、载人返回；带评分、教学提示与飞行记录。高级轨道任务（GTO / GEO）属于阶段六。', 'Development phase 5 / 7 · Seven missions covering suborbital flight, orbit, inclination, polar orbit and crew return, with scoring, guidance and flight records. Advanced orbital missions (GTO / GEO) are planned for phase 6.')}
           </p>
         </footer>
       </div>
