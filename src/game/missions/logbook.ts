@@ -109,3 +109,7 @@ export const isValidLogEntry = (value: unknown): value is FlightLogEntry => {
     isFiniteNumber(entry.downrange)
   );
 };
+
+/** 校验从存档读回的飞行日志：不是数组则为空，无效的条目被丢弃，条数不超过上限。 */
+export const sanitizeLogbook = (value: unknown, limit = LOGBOOK_LIMIT): FlightLogEntry[] =>
+  Array.isArray(value) ? value.filter(isValidLogEntry).slice(0, Math.max(0, limit)) : [];

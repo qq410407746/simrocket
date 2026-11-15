@@ -7,9 +7,9 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { MISSION_CATALOG } from '@/data/missions';
-import { type CareerProgress, type MissionProgress, recordMissionResult } from '@/game/missions/career';
-import { type FlightLogEntry, LOGBOOK_LIMIT, isValidLogEntry, upsertLogEntry } from '@/game/missions/logbook';
-import type { MissionGrade, MissionScore } from '@/game/missions/types';
+import { type CareerProgress, recordMissionResult, sanitizeProgress } from '@/game/missions/career';
+import { type FlightLogEntry, sanitizeLogbook, upsertLogEntry } from '@/game/missions/logbook';
+import type { MissionScore } from '@/game/missions/types';
 
 interface CareerState {
   progress: CareerProgress;
@@ -25,31 +25,6 @@ interface CareerState {
   /** 清空任务进度与飞行日志。 */
   resetCareer: () => void;
 }
-
-const GRADES: readonly MissionGrade[] = ['S', 'A', 'B', 'C', 'F'];
-
-/** 校验读回的任务进度：只保留目录中存在的任务，字段类型不对的回到默认值。 */
-export const sanitizeProgress = (value: unknown): CareerProgress => {
-  if (typeof value !== 'object' || value === null) return {};
-  const out: Record<string, MissionProgress> = {};
-  for (const mission of MISSION_CATALOG) {
-    const saved = (value as Record<string, unknown>)[mission.id];
-    if (typeof saved !== 'object' || saved === null) continue;
-    const record = saved as Partial<MissionProgress>;
-    const bestScore = typeof record.bestScore === 'number' && Number.isFinite(record.bestScore) ? Math.max(0, Math.min(100, record.bestScore)) : 0;
-    const attempts = typeof record.attempts === 'number' && Number.isFinite(record.attempts) ? Math.max(0, Math.floor(record.attempts)) : 0;
-    out[mission.id] = {
-      completed: record.completed === true,
-      bestScore,
-      bestGrade: GRADES.includes(record.bestGrade as MissionGrade) ? (record.bestGrade as MissionGrade) : null,
-      attempts,
-    };
-  }
-  return out;
-};
-
-export const sanitizeLogbook = (value: unknown): FlightLogEntry[] =>
-  Array.isArray(value) ? value.filter(isValidLogEntry).slice(0, LOGBOOK_LIMIT) : [];
 
 export const useCareerStore = create<CareerState>()(
   persist(
@@ -71,7 +46,7 @@ export const useCareerStore = create<CareerState>()(
         const saved = (persisted ?? {}) as Partial<Record<'progress' | 'logbook' | 'unlockAll', unknown>>;
         return {
           ...current,
-          progress: sanitizeProgress(saved.progress),
+          progress: sanitizeProgress(saved.progress, MISSION_CATALOG),
           logbook: sanitizeLogbook(saved.logbook),
           unlockAll: saved.unlockAll === true,
         };

@@ -59,3 +59,28 @@ export const nextMission = (
 /** 已完成的任务数。 */
 export const completedCount = (catalog: readonly MissionDefinition[], progress: CareerProgress): number =>
   catalog.filter((mission) => progressOf(progress, mission.id).completed).length;
+
+const GRADES: readonly MissionGrade[] = ['S', 'A', 'B', 'C', 'F'];
+
+/**
+ * 校验从存档读回的任务进度：只保留目录中存在的任务，类型不对的字段回到默认值。
+ * 旧版本或被改坏的存档因此不会让界面出错。
+ */
+export const sanitizeProgress = (value: unknown, catalog: readonly MissionDefinition[]): CareerProgress => {
+  if (typeof value !== 'object' || value === null) return {};
+  const out: Record<string, MissionProgress> = {};
+  for (const mission of catalog) {
+    const saved = (value as Record<string, unknown>)[mission.id];
+    if (typeof saved !== 'object' || saved === null) continue;
+    const record = saved as Partial<Record<keyof MissionProgress, unknown>>;
+    const bestScore = typeof record.bestScore === 'number' && Number.isFinite(record.bestScore) ? Math.max(0, Math.min(100, record.bestScore)) : 0;
+    const attempts = typeof record.attempts === 'number' && Number.isFinite(record.attempts) ? Math.max(0, Math.floor(record.attempts)) : 0;
+    out[mission.id] = {
+      completed: record.completed === true,
+      bestScore,
+      bestGrade: GRADES.includes(record.bestGrade as MissionGrade) ? (record.bestGrade as MissionGrade) : null,
+      attempts,
+    };
+  }
+  return out;
+};
