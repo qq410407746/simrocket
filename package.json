@@ -27,6 +27,11 @@
     "three": "^0.187.0",
     "zustand": "^5.1.0"
   },
+  "overrides": {
+    "@typescript-eslint/typescript-estree": {
+      "minimatch": "^11.0.1"
+    }
+  },
   "devDependencies": {
     "@eslint/js": "^10.0.0",
     "@playwright/test": "1.63.0",
