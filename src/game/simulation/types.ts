@@ -114,10 +114,13 @@ export interface FlightOutcome {
   readonly longitude: number;
 }
 
-/** 分离体（抛掉的箭体或整流罩半罩）。它们作为独立的弹道物体继续被模拟。 */
+/** 分离体的种类：箭体、整流罩半罩、防热大底。 */
+export type DebrisKind = 'stage' | 'fairing' | 'heat-shield';
+
+/** 分离体（抛掉的箭体、整流罩半罩或防热大底）。它们作为独立的弹道物体继续被模拟。 */
 export interface DebrisState {
   readonly id: number;
-  readonly kind: 'stage' | 'fairing';
+  readonly kind: DebrisKind;
   /** kind 为 'stage' 时：对应 definition.stages 的下标。 */
   readonly stageIndex: number;
   /** kind 为 'fairing' 时：+1 / −1 表示两个半罩；否则为 0。 */
@@ -168,6 +171,8 @@ export type FlightEventKind =
   | 'depleted'
   | 'separation'
   | 'fairing'
+  /** 抛掉防热大底。 */
+  | 'heat-shield'
   | 'payload-ignition'
   /** 减速伞张开、主伞张开、降落伞因开伞条件超限而被撕毁。 */
   | 'drogue-deployed'
@@ -227,6 +232,10 @@ export type SimCommand =
   | { readonly type: 'jettisonFairing' }
   /** 开伞：先放出减速伞，动压降低后主伞自动打开。只对已与推进级分离的返回舱有效。 */
   | { readonly type: 'deployParachute' }
+  /** 抛掉防热大底。只对已与推进级分离的返回舱有效；之后再遇到气动加热，舱底会被烧毁。 */
+  | { readonly type: 'jettisonHeatShield' }
+  /** 配平再入的倾侧角指令 [rad]：0 为升力向上，正值向右，π 为升力向下。 */
+  | { readonly type: 'setBankAngle'; readonly angle: number }
   | { readonly type: 'dispose' };
 
 /** 模拟器 → 主线程。 */

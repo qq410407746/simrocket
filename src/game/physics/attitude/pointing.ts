@@ -11,14 +11,20 @@
  *
  * 顺行/逆行使用的速度 v_ref：低空用相对地面（随地球共转的大气）的速度——上升段希望头部对准来流；
  * 高空用惯性速度——轨道机动希望沿轨道速度方向加速。切换高度为 SURFACE_REFERENCE_ALTITUDE。
+ *
+ * 配平再入（'trim'）：返回舱的防热大底朝前，但舱体轴线偏离来流一个配平迎角 α_t（由质心的横向偏移决定，
+ * 见 physics/aerodynamics/trim.ts），偏转所在的平面由倾侧角 σ 决定：
+ *   v̂ 为相对大气的速度方向，û 为垂直于 v̂、偏向天顶的方向，ŵ = v̂ × û（向右）
+ *   升力方向 l̂ = cos σ·û + sin σ·ŵ      （σ = 0 升力向上，σ > 0 向右倾侧，σ = 180° 升力向下）
+ *   头部方向 n̂ = −cos α_t·v̂ + sin α_t·l̂
  */
 import { EARTH } from '../constants';
 import { airRelativeVelocityEci, frameToBody } from '../frames/frames';
 import type { Quat } from '../math/quat';
-import { type Vec3, ZERO, cross, dot, length, negate, normalize, scale, vec3 } from '../math/vec3';
+import { type Vec3, ZERO, cross, dot, length, negate, normalize, scale, sub, vec3 } from '../math/vec3';
 import type { AttitudeControlParams } from './attitude';
 
-export type AttitudeMode = 'manual' | 'prograde' | 'retrograde' | 'normal' | 'antinormal' | 'radial-out' | 'radial-in';
+export type AttitudeMode = 'manual' | 'prograde' | 'retrograde' | 'normal' | 'antinormal' | 'radial-out' | 'radial-in' | 'trim';
 
 export const ATTITUDE_MODES: readonly AttitudeMode[] = [
   'manual',
@@ -28,6 +34,7 @@ export const ATTITUDE_MODES: readonly AttitudeMode[] = [
   'antinormal',
   'radial-out',
   'radial-in',
+  'trim',
 ];
 
 export const isAttitudeMode = (value: unknown): value is AttitudeMode =>
@@ -48,12 +55,52 @@ const POINTING_DEADBAND = 5e-5;
 export const referenceVelocity = (r: Vec3, v: Vec3): Vec3 =>
   length(r) - EARTH.RADIUS < SURFACE_REFERENCE_ALTITUDE ? airRelativeVelocityEci(r, v) : v;
 
+/** 配平再入的姿态参数。 */
+export interface TrimAttitude {
+  /** 配平迎角 α_t [rad]：舱体轴线偏离"防热大底正对来流"的角度。 */
+  readonly angle: number;
+  /** 倾侧角 σ [rad]：升力方向绕速度方向转过的角度；0 为升力向上，正值向右。 */
+  readonly bank: number;
+}
+
+const NO_TRIM: TrimAttitude = Object.freeze({ angle: 0, bank: 0 });
+
+/**
+ * 配平再入的头部方向（惯性系单位向量）：防热大底朝前、轴线偏离来流 angle、升力方向由 bank 决定。
+ * 相对大气的速度过小时返回 null；速度沿竖直方向时"向上"没有定义，退化为正对来流（没有升力）。
+ */
+export const trimDirection = (r: Vec3, v: Vec3, trim: TrimAttitude): Vec3 | null => {
+  const air = airRelativeVelocityEci(r, v);
+  const speed = length(air);
+  if (speed < MIN_REFERENCE_SPEED) return null;
+  const forward = scale(air, 1 / speed);
+  const up = normalize(r);
+  const upPerp = sub(up, scale(forward, dot(up, forward)));
+  const norm = length(upPerp);
+  if (norm < 1e-4 || trim.angle === 0) return negate(forward);
+  const liftUp = scale(upPerp, 1 / norm);
+  const right = cross(forward, liftUp);
+  const cosBank = Math.cos(trim.bank);
+  const sinBank = Math.sin(trim.bank);
+  const cosTrim = Math.cos(trim.angle);
+  const sinTrim = Math.sin(trim.angle);
+  return normalize(
+    vec3(
+      -cosTrim * forward.x + sinTrim * (cosBank * liftUp.x + sinBank * right.x),
+      -cosTrim * forward.y + sinTrim * (cosBank * liftUp.y + sinBank * right.y),
+      -cosTrim * forward.z + sinTrim * (cosBank * liftUp.z + sinBank * right.z),
+    ),
+  );
+};
+
 /**
  * 给定指向模式下的目标方向（惯性系单位向量）。
  * 'manual' 模式、或参考方向没有定义（速度过小、径向运动使轨道面无定义）时返回 null。
+ * @param trim 'trim' 模式使用的配平迎角与倾侧角
  */
-export const pointingDirection = (mode: AttitudeMode, r: Vec3, v: Vec3): Vec3 | null => {
+export const pointingDirection = (mode: AttitudeMode, r: Vec3, v: Vec3, trim: TrimAttitude = NO_TRIM): Vec3 | null => {
   if (mode === 'manual') return null;
+  if (mode === 'trim') return trimDirection(r, v, trim);
   if (mode === 'prograde' || mode === 'retrograde') {
     const reference = referenceVelocity(r, v);
     if (length(reference) < MIN_REFERENCE_SPEED) return null;

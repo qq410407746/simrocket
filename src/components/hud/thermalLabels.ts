@@ -1,5 +1,5 @@
 /**
- * 热防护与失效原因的显示文字（纯函数，便于测试）。
+ * 热防护、返回与失效原因的显示文字（纯函数，便于测试）。
  */
 import type { FailureCause, FlightOutcome } from '@/game/simulation/types';
 import type { LandingLimits, ParachutePhase, StructuralLimits, ThermalZoneTelemetry } from '@/game/vehicles/types';
@@ -9,6 +9,7 @@ import { formatAngle, formatNumber } from '@/utils/format';
 export const thermalZoneLabel = (zone: Pick<ThermalZoneTelemetry, 'zone' | 'owner' | 'ablative'>): string => {
   if (zone.zone === 'side') return '侧壁';
   if (zone.zone === 'nose') return zone.owner === 'fairing' ? '整流罩' : '头部';
+  if (zone.owner === 'payload-bare') return '舱底';
   return zone.ablative ? '防热大底' : '底部';
 };
 
@@ -23,6 +24,15 @@ export const RISK_LABEL: Record<RiskLevel, { text: string; tone: string }> = {
   caution: { text: '注意', tone: 'text-warn' },
   warning: { text: '危险', tone: 'text-danger' },
   failed: { text: '已失效', tone: 'text-danger' },
+};
+
+/** 倾侧角的显示：带符号的角度 + 升力方向的文字说明（0° 升力向上，正值向右，±180° 升力向下）。 */
+export const bankLabel = (bank: number): string => {
+  const degrees = Math.round((bank * 180) / Math.PI);
+  const magnitude = Math.abs(degrees);
+  const side = magnitude < 3 || magnitude > 177 ? '' : degrees > 0 ? '右' : '左';
+  const vertical = magnitude < 45 ? '升力向上' : magnitude > 135 ? '升力向下' : '侧向';
+  return `${degrees > 0 ? '+' : degrees < 0 ? '−' : ''}${magnitude}° ${vertical}${side ? `·偏${side}` : ''}`;
 };
 
 export const PARACHUTE_LABEL: Record<ParachutePhase, string> = {
@@ -54,6 +64,8 @@ interface OutcomeContext {
   readonly zoneLabel: string | null;
   readonly zoneMaterial: string | null;
   readonly parachute: ParachutePhase;
+  /** 损毁时防热大底是否已经被抛掉（没有大底的飞行器为 false）。 */
+  readonly heatShieldJettisoned?: boolean;
 }
 
 /**
@@ -67,6 +79,12 @@ export const describeOutcome = (outcome: FlightOutcome, context: OutcomeContext)
   const zone = context.zoneLabel ?? '表面';
   switch (outcome.cause) {
     case 'thermal-surface':
+      if (context.heatShieldJettisoned) {
+        return [
+          `在 ${altitude} 高度、${speed} 时，${zone}（${context.zoneMaterial ?? '无防热设计'}）被气动加热烧毁。`,
+          '防热大底已经被抛掉，露出来的舱底结构没有任何防热能力。大底要等再入结束、主伞张开之后再抛。',
+        ];
+      }
       return [
         `在 ${altitude} 高度、${speed} 时，${zone}（${context.zoneMaterial ?? '无防热设计'}）的表面温度超过了材料的最高工作温度。`,
         '只有返回舱的防热大底能承受再入加热：再入前分离推进级，并让大底朝前（逆行保持）。',

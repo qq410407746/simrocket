@@ -21,6 +21,8 @@ export const describeEvent = (event: FlightEvent, vehicle: VehicleDefinition): s
       return `${stageName(vehicle, event.stageIndex)}分离`;
     case 'fairing':
       return '整流罩分离';
+    case 'heat-shield':
+      return '防热大底分离';
     case 'payload-ignition':
       return '飞船发动机点火';
     case 'drogue-deployed':

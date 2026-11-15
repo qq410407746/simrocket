@@ -47,6 +47,12 @@ interface DebugState {
       remainingDeltaV: number;
       activeStageIndex: number;
       fairingAttached: boolean;
+      heatShieldAttached: boolean;
+      canJettisonHeatShield: boolean;
+      trimAngle: number;
+      bankAngle: number;
+      angleOfAttack: number;
+      liftToDrag: number;
       stagePropellant: number[];
       stageAttached: boolean[];
       attitudeMode: string;
@@ -921,6 +927,103 @@ test.describe('再入与热防护（阶段四）', () => {
     await page.getByTestId('summary-restart').click();
     await expect.poll(async () => (await readState(page))!.sim.outcome).toBeNull();
     await expect(page.getByTestId('thermal-risk')).toHaveText('正常');
+    expect(problems).toEqual([]);
+  });
+
+  test('配平再入与抛大底：Y 保持配平迎角产生升力，Q / E 改变倾侧角；主伞张开后按 H 抛掉防热大底', async ({ page }) => {
+    test.setTimeout(420_000);
+    const problems = await startApp(page);
+    await enterOrbit(page);
+    // 带着推进级时：不能配平、不能抛大底
+    await expect(page.getByTestId('attitude-trim')).toBeDisabled();
+    await expect(page.getByTestId('heat-shield-button')).toBeDisabled();
+    await page.keyboard.press('KeyT');
+    await page.getByTestId('warp-10').click();
+    await expect
+      .poll(
+        async () => {
+          const t = (await readState(page))!.sim.telemetry!;
+          return t.heading !== null && t.heading * DEG > 265 && Math.abs(t.pitch) * DEG < 3;
+        },
+        { timeout: 60_000 },
+      )
+      .toBe(true);
+    await page.getByTestId('warp-1').click();
+    await page.keyboard.press('Space');
+    await page.keyboard.press('KeyZ');
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.orbit!.periapsisAltitude, { timeout: 60_000 }).toBeLessThan(30_000);
+    await page.keyboard.press('KeyX');
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.thrust).toBe(0);
+    await page.keyboard.press('Space');
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.activeStageIndex).toBe(2);
+
+    // 只剩返回舱：配平迎角约 20°（由质心偏移算出），可以进入配平模式
+    const alone = (await readState(page))!.sim.telemetry!;
+    expect(alone.trimAngle * DEG).toBeGreaterThan(18);
+    expect(alone.trimAngle * DEG).toBeLessThan(21);
+    expect(alone.canJettisonHeatShield).toBe(true);
+    await expect(page.getByTestId('attitude-trim')).toBeEnabled();
+    await page.keyboard.press('KeyY');
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.attitudeMode).toBe('trim');
+    await expect(page.getByTestId('attitude-trim')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByTestId('navball-bank')).toContainText('升力向上');
+    // 迎角收敛到 180° − 配平迎角
+    await expect
+      .poll(async () => Math.abs((await readState(page))!.sim.telemetry!.angleOfAttack * DEG - (180 - alone.trimAngle * DEG)), { timeout: 60_000 })
+      .toBeLessThan(1);
+
+    // E：向右倾侧；配平模式不被打断
+    await page.keyboard.down('KeyE');
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.bankAngle * DEG, { timeout: 20_000 }).toBeGreaterThan(20);
+    await page.keyboard.up('KeyE');
+    const banked = (await readState(page))!.sim.telemetry!;
+    expect(banked.attitudeMode).toBe('trim');
+    await expect(page.getByTestId('navball-bank')).toContainText('偏右');
+    // Q：转回升力向上
+    await page.keyboard.down('KeyQ');
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.bankAngle * DEG, { timeout: 20_000 }).toBeLessThan(4);
+    await page.keyboard.up('KeyQ');
+    expect(Math.abs((await readState(page))!.sim.telemetry!.bankAngle) * DEG).toBeLessThan(15);
+
+    // 再入：升阻比约 0.3
+    await page.getByTestId('warp-1000').click();
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.referenceHeatFlux, { timeout: 150_000 }).toBeGreaterThan(250_000);
+    const heating = await expectAllFinite(page);
+    expect(heating.sim.telemetry!.liftToDrag).toBeGreaterThan(0.27);
+    expect(heating.sim.telemetry!.liftToDrag).toBeLessThan(0.34);
+    await expect(page.getByTestId('flight-hint')).toContainText('配平再入');
+
+    // 降到 4 km 以下再开伞（缩短伞降时间）
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.altitude, { timeout: 300_000 }).toBeLessThan(4_000);
+    const low = (await readState(page))!.sim.telemetry!;
+    expect(low.mach).toBeLessThan(0.9);
+    await page.keyboard.press('KeyG');
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.parachute.phase, { timeout: 60_000 }).toBe('main');
+    expect((await readState(page))!.sim.telemetry!.attitudeMode).toBe('manual');
+    await expect(page.getByTestId('flight-hint')).toContainText('按 H 抛掉防热大底');
+
+    // H：抛大底——质量减少 650 kg，底部热区换成舱底结构，多出一个分离体
+    const before = (await readState(page))!;
+    await page.keyboard.press('KeyH');
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.heatShieldAttached).toBe(false);
+    const after = await expectAllFinite(page);
+    expect(after.sim.telemetry!.mass).toBeCloseTo(before.sim.telemetry!.mass - 650, 3);
+    expect(after.sim.events).toContain('heat-shield');
+    // 分离体数量取自渲染帧（软件渲染下帧率很低，要等下一帧）
+    await expect.poll(async () => (await readState(page))!.debrisCount, { timeout: 30_000 }).toBeGreaterThanOrEqual(1);
+    await expect(page.getByTestId('heat-shield-button')).toContainText('已抛大底');
+    await expect(page.getByTestId('heat-shield-button')).toBeDisabled();
+    await expect(page.getByTestId('thermal-zone-base')).toContainText('舱底结构');
+
+    await expect.poll(async () => (await readState(page))!.sim.outcome?.kind ?? null, { timeout: 200_000 }).toBe('landed');
+    const state = await expectAllFinite(page);
+    // 抛掉大底后落得更慢（带着大底约 7.8 m/s）
+    expect(state.sim.outcome!.impactSpeed).toBeGreaterThan(6.5);
+    expect(state.sim.outcome!.impactSpeed).toBeLessThan(7.7);
+    // 升力式再入：整个飞行的最大过载就是开伞冲击（约 4.4 g），远低于弹道式的 8 g
+    expect(state.sim.stats!.maxGLoad).toBeLessThan(5.5);
+    const hudText = await page.getByTestId('flight-hud').innerText();
+    expect(hudText).not.toMatch(/NaN|Infinity|undefined/);
     expect(problems).toEqual([]);
   });
 

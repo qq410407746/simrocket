@@ -21,6 +21,8 @@ const isAttached = (section: RocketSection, snapshot: SimSnapshot): boolean => {
       return snapshot.vehicle.stages[section.stageIndex]?.attached ?? false;
     case 'fairing':
       return snapshot.vehicle.fairingAttached;
+    case 'heat-shield':
+      return snapshot.vehicle.heatShieldAttached;
     default:
       return true;
   }
@@ -31,7 +33,9 @@ const findDebris = (section: RocketSection, debris: readonly DebrisState[]): Deb
     ? debris.find((d) => d.kind === 'stage' && d.stageIndex === section.stageIndex)
     : section.kind === 'fairing'
       ? debris.find((d) => d.kind === 'fairing' && d.half === section.half)
-      : undefined;
+      : section.kind === 'heat-shield'
+        ? debris.find((d) => d.kind === 'heat-shield')
+        : undefined;
 
 /**
  * 飞行器的全部分段。每个分段每帧处于三种状态之一：
@@ -83,7 +87,7 @@ export function VehicleAssembly({ vehicle }: { vehicle: VehicleDefinition }) {
       o.visible = true;
       eciToRenderRelative(debris.position, frameState.cameraPosition, o.position);
       eciOrientationToRender(debris.attitude, o.quaternion).multiply(MODEL_TO_BODY);
-      // 分离体的参考点：箭体为其质心，整流罩半罩为轴线上的几何中心。
+      // 分离体的参考点：箭体为其质心，整流罩半罩与防热大底为轴线上的几何中心。
       const stage = vehicle.stages[section.stageIndex];
       const pivot =
         section.kind === 'stage' && stage

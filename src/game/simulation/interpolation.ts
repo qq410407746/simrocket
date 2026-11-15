@@ -63,12 +63,13 @@ export const hermiteVelocity = (p0: Vec3, v0: Vec3, p1: Vec3, v1: Vec3, h: numbe
 };
 
 /**
- * 两个快照之间飞行器的"状态点"是否不连续：分级或抛罩会使质心在箭体内的位置突变，
+ * 两个快照之间飞行器的"状态点"是否不连续：分级、抛罩或抛大底会使质心在箭体内的位置突变，
  * 飞行阶段切换（起飞、接地）也会改变运动规律。跨越这种不连续做插值会让模型瞬间滑动几十米。
  */
 export const hasDiscontinuity = (a: SimSnapshot, b: SimSnapshot): boolean =>
   a.vehicle.activeStageIndex !== b.vehicle.activeStageIndex ||
   a.vehicle.fairingAttached !== b.vehicle.fairingAttached ||
+  a.vehicle.heatShieldAttached !== b.vehicle.heatShieldAttached ||
   (a.vehicle.phase !== b.vehicle.phase && b.vehicle.phase !== 'flight');
 
 /** 在两个快照之间插值；t 超出区间时按端点速度线性外推。 */

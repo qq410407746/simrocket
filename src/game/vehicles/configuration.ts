@@ -3,11 +3,12 @@
  * 全部是定义数据 + 构型状态的纯函数，模拟器与界面共用。
  */
 import type { AeroProperties } from '../physics/aerodynamics/drag';
+import { trimAngleOfAttack } from '../physics/aerodynamics/trim';
 import { DEG2RAD } from '../physics/constants';
 import { idealDeltaV } from '../physics/propulsion/engine';
 import type { ThermalZoneId } from '../physics/thermodynamics/heating';
 import type { ThermalSurfaceProperties } from '../physics/thermodynamics/thermalZone';
-import { type MassProperties, computeMassProperties, payloadStackHeight } from './analysis';
+import { type MassProperties, capsuleSideAngle, computeMassProperties, payloadStackHeight } from './analysis';
 import type {
   EngineDefinition,
   LandingLimits,
@@ -23,6 +24,8 @@ export interface ConfigurationState {
   readonly stages: readonly StageState[];
   readonly payloadPropellantMass: number;
   readonly fairingAttached: boolean;
+  /** 防热大底是否仍在；缺省视为仍在。 */
+  readonly heatShieldAttached?: boolean;
 }
 
 /** 发射前的满载构型。 */
@@ -30,6 +33,7 @@ export const initialConfiguration = (vehicle: VehicleDefinition): ConfigurationS
   stages: vehicle.stages.map((s) => ({ propellantMass: s.propellantMass, attached: true })),
   payloadPropellantMass: vehicle.payload.propellantMass,
   fairingAttached: vehicle.payload.kind === 'satellite',
+  heatShieldAttached: vehicle.payload.kind === 'capsule',
 });
 
 /** 仍连接的最低一级的下标；全部分离后返回 stages.length。 */
@@ -45,6 +49,7 @@ export const configurationMassProperties = (vehicle: VehicleDefinition, config: 
     stageAttached: config.stages.map((s) => s.attached),
     payloadPropellant: config.payloadPropellantMass,
     fairingAttached: config.fairingAttached,
+    heatShieldAttached: config.heatShieldAttached,
   });
 
 /** 当前构型的总高度 [m]。 */
@@ -165,14 +170,19 @@ export const stageAloneMassProperties = (stage: StageDefinition, propellantMass:
   };
 };
 
+/** 抛掉防热大底后，底部热区的归属标记。 */
+export const BARE_CAPSULE_BASE = 'payload-bare';
+
 /** 一个热区当前的归属与参数。 */
 export interface ThermalZoneSetup {
   readonly zone: ThermalZoneId;
-  /** 承担该热区的部件：'fairing'、'payload' 或 'stage-<下标>'。归属变化时该热区的热状态要重新开始。 */
+  /** 承担该热区的部件：'fairing'、'payload'、'payload-bare'（抛掉大底后的舱底）或 'stage-<下标>'。归属变化时该热区的热状态要重新开始。 */
   readonly owner: string;
   /** 计算驻点热流用的曲率半径 [m]。 */
   readonly radius: number;
   readonly surface: ThermalSurfaceProperties;
+  /** 侧壁的半锥角 [rad]（向头部收缩为正）；圆柱形侧壁与其余热区不填（视为 0）。 */
+  readonly slope?: number;
 }
 
 /**
@@ -180,9 +190,10 @@ export interface ThermalZoneSetup {
  *
  *  - 头部：整流罩（若还在），否则是载荷的顶部（返回舱舱顶 / 卫星本体）；
  *  - 侧壁：仍带着推进级时取最低连接级的箱壁（各级材料相同，也是最薄弱的）；只剩载荷时取载荷侧壁；
- *  - 底部：最低连接级的发动机舱；只剩返回舱时是防热大底。
+ *  - 底部：最低连接级的发动机舱；只剩返回舱时是防热大底，大底抛掉后是露出来的舱底结构。
  *
  * 曲率半径：侧壁取箱体半径；推进级底部是平的钝面，取箱体直径作为等效半径。
+ * 返回舱单独飞行时侧壁是锥面：大底朝前且迎角小于半锥角时，侧壁躲在大底的背风区里（见 heating.ts）。
  */
 export const configurationThermalZones = (vehicle: VehicleDefinition, config: ConfigurationState): readonly ThermalZoneSetup[] => {
   const { payload } = vehicle;
@@ -205,10 +216,14 @@ export const configurationThermalZones = (vehicle: VehicleDefinition, config: Co
     ];
   }
   if (payload.kind === 'capsule') {
+    const base: ThermalZoneSetup =
+      config.heatShieldAttached === false
+        ? { zone: 'base', owner: BARE_CAPSULE_BASE, radius: payload.heatShield.noseRadius, surface: payload.thermal.aft }
+        : { zone: 'base', owner: 'payload', radius: payload.heatShield.noseRadius, surface: payload.heatShield.surface };
     return [
       nose,
-      { zone: 'side', owner: 'payload', radius: payload.geometry.diameter / 2, surface: payload.thermal.side },
-      { zone: 'base', owner: 'payload', radius: payload.heatShield.noseRadius, surface: payload.heatShield.surface },
+      { zone: 'side', owner: 'payload', radius: payload.geometry.diameter / 2, surface: payload.thermal.side, slope: capsuleSideAngle(payload) },
+      base,
     ];
   }
   const radius = payload.geometry.diameter / 2;
@@ -235,3 +250,26 @@ export const configurationLandingLimits = (vehicle: VehicleDefinition, config: C
   lowestAttachedStage(config) >= vehicle.stages.length && vehicle.payload.kind === 'capsule'
     ? vehicle.payload.landing
     : DEFAULT_LANDING_LIMITS;
+
+/** 是否只剩返回舱（所有推进级都已分离）。 */
+export const isCapsuleAlone = (vehicle: VehicleDefinition, config: ConfigurationState): boolean =>
+  lowestAttachedStage(config) >= vehicle.stages.length && vehicle.payload.kind === 'capsule';
+
+/**
+ * 当前构型的配平迎角 [rad]：只有单独飞行的返回舱、且质心有横向偏移时不为 0。
+ * 质心的轴向位置取设计值（不随大底是否抛掉而变——抛大底发生在开伞之后，配平已无意义）。
+ */
+export const configurationTrimAngle = (vehicle: VehicleDefinition, config: ConfigurationState): number => {
+  const { payload } = vehicle;
+  if (payload.kind !== 'capsule' || !isCapsuleAlone(vehicle, config)) return 0;
+  return trimAngleOfAttack({
+    noseRadius: payload.heatShield.noseRadius,
+    baseRadius: payload.geometry.diameter / 2,
+    centerOfMassHeight: payload.centerOfMass.height,
+    centerOfMassOffset: payload.centerOfMass.lateralOffset,
+  });
+};
+
+/** 现在能否抛掉防热大底：只有单独飞行、大底还在的返回舱可以（带着推进级时大底被挡在里面）。 */
+export const canJettisonHeatShield = (vehicle: VehicleDefinition, config: ConfigurationState): boolean =>
+  isCapsuleAlone(vehicle, config) && config.heatShieldAttached !== false;

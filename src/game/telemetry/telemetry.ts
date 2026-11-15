@@ -17,7 +17,13 @@ import { gravityMagnitude } from '../physics/gravity/pointMass';
 import { type Vec3, angleBetween, dot, length } from '../physics/math/vec3';
 import { type ConicKind, elementsFromState, timeToApoapsis, timeToPeriapsis } from '../physics/orbital/elements';
 import type { SimSnapshot, SimulationConfig } from '../simulation/types';
-import { configurationLandingLimits, configurationParachute, configurationStructure, remainingDeltaV } from '../vehicles/configuration';
+import {
+  canJettisonHeatShield,
+  configurationLandingLimits,
+  configurationParachute,
+  configurationStructure,
+  remainingDeltaV,
+} from '../vehicles/configuration';
 import type { FlightPhase, LandingLimits, ParachuteState, StructuralLimits, ThermalZoneTelemetry } from '../vehicles/types';
 
 /**
@@ -143,6 +149,13 @@ export interface Telemetry {
   readonly airDensity: number;
   /** 自动指向模式。 */
   readonly attitudeMode: AttitudeMode;
+  /** 当前构型的配平迎角 [rad]；不能做配平再入（不是单独的返回舱、或质心没有横向偏移）时为 0。 */
+  readonly trimAngle: number;
+  /** 配平再入的倾侧角 [rad]，(−π, π]：0 为升力向上，正值向右。 */
+  readonly bankAngle: number;
+  /** 防热大底是否仍在，以及现在能否抛掉（只有单独飞行的返回舱可以）。 */
+  readonly heatShieldAttached: boolean;
+  readonly canJettisonHeatShield: boolean;
   /** 密切轨道；只在自由飞行中给出，其余阶段为 null。 */
   readonly orbit: OrbitTelemetry | null;
   /** 气动升力 [N] 与升阻比（没有阻力时为 0）。 */
@@ -223,6 +236,10 @@ export const deriveTelemetry = (snapshot: SimSnapshot, config: SimulationConfig)
     angleOfAttack: vehicle.flight.angleOfAttack,
     airDensity: vehicle.flight.airDensity,
     attitudeMode: vehicle.attitudeMode,
+    trimAngle: vehicle.trimAngle,
+    bankAngle: vehicle.bankAngle,
+    heatShieldAttached: vehicle.heatShieldAttached,
+    canJettisonHeatShield: vehicle.phase === 'flight' && canJettisonHeatShield(config.vehicle, vehicle),
     orbit: vehicle.phase === 'flight' ? deriveOrbit(position, velocity) : null,
     lift: vehicle.flight.lift,
     liftToDrag: vehicle.flight.drag > 1e-6 ? vehicle.flight.lift / vehicle.flight.drag : 0,

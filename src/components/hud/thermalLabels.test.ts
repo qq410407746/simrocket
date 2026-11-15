@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { FlightOutcome } from '@/game/simulation/types';
 import type { LandingLimits, StructuralLimits } from '@/game/vehicles/types';
-import { PARACHUTE_LABEL, RISK_LABEL, describeOutcome, failureTitle, thermalRisk, thermalZoneLabel } from './thermalLabels';
+import { PARACHUTE_LABEL, RISK_LABEL, bankLabel, describeOutcome, failureTitle, thermalRisk, thermalZoneLabel } from './thermalLabels';
 
 const landing: LandingLimits = { verticalSpeed: 10, horizontalSpeed: 8, tilt: Math.PI / 4 };
 const structure: StructuralLimits = { maxGLoad: 14, maxDynamicPressure: 150_000, maxBendingLoad: Infinity };
@@ -26,6 +26,21 @@ describe('热区名称', () => {
     expect(thermalZoneLabel({ zone: 'side', owner: 'stage-1', ablative: false })).toBe('侧壁');
     expect(thermalZoneLabel({ zone: 'base', owner: 'stage-1', ablative: false })).toBe('底部');
     expect(thermalZoneLabel({ zone: 'base', owner: 'payload', ablative: true })).toBe('防热大底');
+    // 抛掉大底后露出来的舱底
+    expect(thermalZoneLabel({ zone: 'base', owner: 'payload-bare', ablative: false })).toBe('舱底');
+  });
+});
+
+describe('倾侧角的显示', () => {
+  const deg = (d: number) => (d * Math.PI) / 180;
+  it('给出带符号的角度与升力方向', () => {
+    expect(bankLabel(0)).toBe('0° 升力向上');
+    expect(bankLabel(deg(30))).toBe('+30° 升力向上·偏右');
+    expect(bankLabel(deg(-30))).toBe('−30° 升力向上·偏左');
+    expect(bankLabel(deg(90))).toBe('+90° 侧向·偏右');
+    expect(bankLabel(deg(-100))).toBe('−100° 侧向·偏左');
+    expect(bankLabel(deg(150))).toBe('+150° 升力向下·偏右');
+    expect(bankLabel(Math.PI)).toBe('+180° 升力向下');
   });
 });
 
@@ -76,6 +91,15 @@ describe('飞行结果说明', () => {
     const soak = describeOutcome({ ...airborne, cause: 'thermal-structure', thermalZone: 'base' }, { ...context, zoneLabel: '防热大底', zoneMaterial: '烧蚀防热层' });
     expect(soak.join('')).toContain('再入角太浅');
     expect(failureTitle('burn-through')).toBe('防热层烧穿');
+  });
+
+  it('抛掉大底后舱底被烧毁：说明原因是大底抛得太早', () => {
+    const reasons = describeOutcome(
+      { ...base, altitude: 96_000, impactSpeed: 7_500, cause: 'thermal-surface', thermalZone: 'base' },
+      { ...context, zoneLabel: '舱底', zoneMaterial: '舱底结构（无防热）', heatShieldJettisoned: true },
+    );
+    expect(reasons[0]).toBe('在 96.0 km 高度、7,500 m/s 时，舱底（舱底结构（无防热））被气动加热烧毁。');
+    expect(reasons[1]).toContain('主伞张开之后再抛');
   });
 
   it('结构失效：给出被超过的限值', () => {

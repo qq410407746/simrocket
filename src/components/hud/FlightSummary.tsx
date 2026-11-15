@@ -35,6 +35,7 @@ export function FlightSummary() {
     zoneLabel: failedZone ? thermalZoneLabel(failedZone) : null,
     zoneMaterial: failedZone?.material ?? null,
     parachute: telemetry.parachute.phase,
+    heatShieldJettisoned: failedZone?.owner === 'payload-bare',
   });
 
   const maxAltitude = formatDistance(stats.maxAltitude);

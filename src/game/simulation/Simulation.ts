@@ -13,8 +13,8 @@
  *  - 推进剂耗尽：把该步拆成"有动力段 + 无动力段"；
  *  - 接地：对步内时间做二分，定位接地瞬间并记录当时的速度与姿态。
  *
- * 尚未建模（如实说明）：气动力矩、发动机启动/关机瞬态、推进剂晃动与沉底、分离体之间的碰撞、
- * 分离体的气动加热；解体后的残骸不再模拟。
+ * 尚未建模（如实说明）：气动力矩（返回舱的配平迎角由"配平保持"指向模式维持，不是由力矩自然收敛）、
+ * 发动机启动/关机瞬态、推进剂晃动与沉底、分离体之间的碰撞、分离体的气动加热；解体后的残骸不再模拟。
  */
 import {
   type AeroProperties,
@@ -35,6 +35,7 @@ import {
 } from '../physics/attitude/attitude';
 import {
   type AttitudeMode,
+  type TrimAttitude,
   isAttitudeMode,
   pointingDirection,
   steeringRateCommand,
@@ -74,17 +75,20 @@ import {
   DEFAULT_LANDING_LIMITS,
   type ThermalZoneSetup,
   activePropulsion,
+  canJettisonHeatShield,
   configurationAero,
   configurationLandingLimits,
   configurationMassProperties,
   configurationParachute,
   configurationStructure,
   configurationThermalZones,
+  configurationTrimAngle,
   initialConfiguration,
   lowestAttachedStage,
   stackHeight,
   stageAloneMassProperties,
 } from '../vehicles/configuration';
+import { heatShieldCenterHeight } from '../vehicles/analysis';
 import type {
   FlightDiagnostics,
   FlightPhase,
@@ -96,6 +100,7 @@ import type {
   VehicleState,
 } from '../vehicles/types';
 import {
+  type DebrisKind,
   type DebrisState,
   type FailureCause,
   type FlightEvent,
@@ -122,6 +127,12 @@ export const ATTITUDE_CONTROL: AttitudeControlParams = {
 const STAGE_SEPARATION_SPEED = 1.5;
 /** 整流罩半罩的横向分离速度 [m/s]。 */
 const FAIRING_SEPARATION_SPEED = 3;
+/** 防热大底的分离速度 [m/s]（弹射机构给出的相对速度）。 */
+const HEAT_SHIELD_SEPARATION_SPEED = 2;
+/** 抛掉的防热大底（翻滚的浅碟）的平均阻力系数，以返回舱的参考面积为基准。 */
+const HEAT_SHIELD_DEBRIS_DRAG_COEFFICIENT = 0.7;
+/** 配平再入时倾侧角的最大变化率 [rad/s]（整舱绕速度方向滚转）。 */
+export const BANK_RATE = 15 * DEG2RAD;
 /** 同时跟踪的分离体数量上限与最长跟踪时间 [s]。 */
 const MAX_DEBRIS = 8;
 const DEBRIS_LIFETIME = 1800;
@@ -184,6 +195,12 @@ const ZERO_DIAGNOSTICS: FlightDiagnostics = Object.freeze({
 
 const clamp01 = (x: number): number => Math.max(0, Math.min(1, x));
 
+/** 把角度归一到 (−π, π]。 */
+const wrapAngle = (angle: number): number => {
+  const wrapped = angle - 2 * Math.PI * Math.floor((angle + Math.PI) / (2 * Math.PI));
+  return wrapped === -Math.PI ? Math.PI : wrapped;
+};
+
 /** 状态有效性检查：任何 NaN / Infinity 都视为无效，不得传给渲染层。 */
 export const isValidVehicleState = (s: VehicleState): boolean =>
   isFiniteVec3(s.body.position) &&
@@ -195,6 +212,8 @@ export const isValidVehicleState = (s: VehicleState): boolean =>
   s.mass > 0 &&
   Number.isFinite(s.centerOfMassHeight) &&
   Number.isFinite(s.throttle) &&
+  Number.isFinite(s.trimAngle) &&
+  Number.isFinite(s.bankAngle) &&
   Number.isFinite(s.payloadPropellantMass) &&
   s.stages.every((st) => Number.isFinite(st.propellantMass) && st.propellantMass >= 0) &&
   Object.values(s.flight).every((x) => Number.isFinite(x)) &&
@@ -258,6 +277,8 @@ class VehicleForceModel {
    * 真实飞行的每一步里姿态由姿态模型给出，这里保持 'manual'。
    */
   pointing: AttitudeMode = 'manual';
+  /** pointing 为 'trim' 时使用的配平迎角与倾侧角。 */
+  trim: TrimAttitude = { angle: 0, bank: 0 };
 
   // —— 最近一次 evaluate 的结果 ——
   gx = 0;
@@ -291,7 +312,7 @@ class VehicleForceModel {
     this.mach = speed / atm.speedOfSound;
     if (atm.density > 0 && speed > 1e-9) {
       if (this.pointing !== 'manual') {
-        const target = pointingDirection(this.pointing, r, v);
+        const target = pointingDirection(this.pointing, r, v, this.trim);
         if (target) {
           this.noseX = target.x;
           this.noseY = target.y;
@@ -353,7 +374,7 @@ class BallisticForceModel {
 
 interface DebrisBody {
   readonly id: number;
-  readonly kind: 'stage' | 'fairing';
+  readonly kind: DebrisKind;
   readonly stageIndex: number;
   readonly half: -1 | 0 | 1;
   readonly r: MutableVec3;
@@ -407,7 +428,12 @@ export class Simulation {
   private phase: FlightPhase = 'prelaunch';
 
   // —— 构型（结构上满足 ConfigurationState，可直接传给构型相关的纯函数）——
-  private readonly cfg: { stages: MutableStage[]; payloadPropellantMass: number; fairingAttached: boolean };
+  private readonly cfg: {
+    stages: MutableStage[];
+    payloadPropellantMass: number;
+    fairingAttached: boolean;
+    heatShieldAttached: boolean;
+  };
   /** 由构型导出的量（构型或推进剂变化后刷新）。 */
   private mass = 1;
   private centerOfMassHeight = 0;
@@ -420,6 +446,11 @@ export class Simulation {
   private attitudeMode: AttitudeMode = 'manual';
   /** 上一步的自动指向目标，用于估计目标方向的转动角速度（前馈）。 */
   private lastPointing: { readonly mode: AttitudeMode; readonly direction: Vec3 } | null = null;
+  /** 当前构型的配平迎角 [rad]（不是单独的返回舱时为 0）。 */
+  private trimAngle = 0;
+  /** 配平再入的倾侧角：指令值与当前值 [rad]。当前值以 BANK_RATE 趋近指令值。 */
+  private bankCommand = 0;
+  private bankAngle = 0;
 
   // —— 自由飞行状态（ECI）——
   private readonly r: MutableVec3 = { x: 0, y: 0, z: 0 };
@@ -492,6 +523,7 @@ export class Simulation {
       stages: initial.stages.map((s) => ({ ...s })),
       payloadPropellantMass: initial.payloadPropellantMass,
       fairingAttached: initial.fairingAttached,
+      heatShieldAttached: initial.heatShieldAttached === true,
     };
     this.ambientTemperature = sampleAtmosphere(config.site.altitude, this.padAtmosphere).temperature;
     this.refreshConfiguration();
@@ -628,11 +660,14 @@ export class Simulation {
       stages: this.cfg.stages.map((s) => ({ ...s })),
       payloadPropellantMass: this.cfg.payloadPropellantMass,
       fairingAttached: this.cfg.fairingAttached,
+      heatShieldAttached: this.cfg.heatShieldAttached,
       activeStageIndex: lowestAttachedStage(this.cfg),
       throttle: this.throttle,
       ignited: this.ignited,
       attitudeInput: this.attitudeInput,
       attitudeMode: this.attitudeMode,
+      trimAngle: this.trimAngle,
+      bankAngle: this.bankAngle,
       phase: this.phase,
       mass: this.mass,
       centerOfMassHeight: this.centerOfMassHeight,
@@ -668,9 +703,22 @@ export class Simulation {
     this.attitudeInput = sanitizeAttitudeInput(input);
   }
 
-  /** 自动指向模式。无效的取值被忽略。手动操纵输入会暂时覆盖自动指向。 */
+  /**
+   * 自动指向模式。无效的取值被忽略。手动操纵输入会暂时覆盖自动指向。
+   * 'trim'（配平再入）只对质心有横向偏移、且已与推进级分离的返回舱有效。
+   */
   setAttitudeMode(mode: AttitudeMode): void {
-    if (isAttitudeMode(mode)) this.attitudeMode = mode;
+    if (!isAttitudeMode(mode)) return;
+    if (mode === 'trim' && !(this.trimAngle > 0)) return;
+    this.attitudeMode = mode;
+  }
+
+  /**
+   * 配平再入的倾侧角指令 [rad]：0 为升力向上，正值向右倾侧，π 为升力向下。
+   * 实际倾侧角以 BANK_RATE 沿最短路径转到指令值。无效数值被忽略。
+   */
+  setBankAngle(angle: number): void {
+    if (Number.isFinite(angle)) this.bankCommand = wrapAngle(angle);
   }
 
   /**
@@ -725,6 +773,48 @@ export class Simulation {
     this.parachuteTimer = 0;
     this.attitudeMode = 'manual';
     this.emit('drogue-deployed', -1);
+  }
+
+  /**
+   * 抛掉防热大底（仅对飞行中、已与推进级分离、大底还在的返回舱有效）。
+   * 飞行器减去大底的质量（伞降速度随之降低），底部热区改由露出来的舱底结构承担——
+   * 它没有任何防热能力，之后再遇到气动加热就会烧毁。大底成为独立的弹道物体。
+   */
+  jettisonHeatShield(): void {
+    const { payload } = this.vehicle;
+    if (this.phase !== 'flight' || payload.kind !== 'capsule' || !canJettisonHeatShield(this.vehicle, this.cfg)) return;
+
+    const nose = rotate(this.attitude, BODY_X);
+    const oldCom = this.centerOfMassHeight;
+    const shieldMass = payload.heatShield.mass;
+    const position = vec3(this.r.x, this.r.y, this.r.z);
+    const velocity = vec3(this.v.x, this.v.y, this.v.z);
+
+    this.cfg.heatShieldAttached = false;
+    this.refreshConfiguration();
+    this.refreshStructure();
+
+    // 动量守恒的分离冲量：大底沿舱体轴线向后（舱底方向）弹出。
+    const total = this.mass + shieldMass;
+    const vehicleKick = (HEAT_SHIELD_SEPARATION_SPEED * shieldMass) / total;
+    const debrisKick = (-HEAT_SHIELD_SEPARATION_SPEED * this.mass) / total;
+    this.addDebris({
+      kind: 'heat-shield',
+      stageIndex: -1,
+      half: 0,
+      position: addScaled(position, nose, heatShieldCenterHeight(payload) - oldCom),
+      velocity: addScaled(velocity, nose, debrisKick),
+      angularVelocity: vec3(0, 0.35, 0.1),
+      mass: shieldMass,
+      propellantMass: 0,
+      dragArea: HEAT_SHIELD_DEBRIS_DRAG_COEFFICIENT * payload.aero.referenceArea,
+    });
+
+    this.shiftPosition(nose, this.centerOfMassHeight - oldCom);
+    this.v.x += nose.x * vehicleKick;
+    this.v.y += nose.y * vehicleKick;
+    this.v.z += nose.z * vehicleKick;
+    this.emit('heat-shield', -1);
   }
 
   /** 抛整流罩（仅飞行中有效）。两个半罩沿机体 ±Y 方向分离。 */
@@ -945,7 +1035,7 @@ export class Simulation {
     const sink = environmentTemperature(temperature);
     let failed: { zone: ThermalZoneId; failure: ThermalFailure } | null = null;
     for (const { setup, state } of this.thermalZones) {
-      const coldWall = stagnationHeatFlux(density, fm.airspeed, setup.radius) * exposure(setup.zone, fm.cosAlpha);
+      const coldWall = stagnationHeatFlux(density, fm.airspeed, setup.radius) * exposure(setup.zone, fm.cosAlpha, setup.slope ?? 0);
       const failure = stepThermalZone(setup.surface, state, coldWall, temperature, fm.airspeed, sink, dt);
       if (failure && !failed) failed = { zone: setup.zone, failure };
     }
@@ -1028,12 +1118,15 @@ export class Simulation {
       return steeringRateCommand(this.attitude, rotate(this.attitude, BODY_X), target, PARACHUTE_ATTITUDE);
     }
     const input = this.attitudeInput;
-    const manual = input.pitch !== 0 || input.yaw !== 0 || input.roll !== 0;
+    const trimming = this.attitudeMode === 'trim';
+    // 配平再入时滚转键控制倾侧角（整舱绕速度方向滚转），不算打断自动指向的手动输入
+    const manual = input.pitch !== 0 || input.yaw !== 0 || (input.roll !== 0 && !trimming);
     if (manual || this.attitudeMode === 'manual') {
       this.lastPointing = null;
       return commandedBodyRate(input, ATTITUDE_CONTROL);
     }
-    const target = pointingDirection(this.attitudeMode, this.r, this.v);
+    const bankRate = trimming ? this.advanceBank(input.roll) : 0;
+    const target = pointingDirection(this.attitudeMode, this.r, this.v, { angle: this.trimAngle, bank: this.bankAngle });
     if (!target) {
       this.lastPointing = null;
       return vec3(0, 0, 0);
@@ -1045,7 +1138,24 @@ export class Simulation {
         ? targetAngularVelocity(previous.direction, target, this.dt, ATTITUDE_CONTROL.maxPitchYawRate)
         : undefined;
     this.lastPointing = { mode: this.attitudeMode, direction: target };
-    return steeringRateCommand(this.attitude, rotate(this.attitude, BODY_X), target, ATTITUDE_CONTROL, feedForward);
+    const command = steeringRateCommand(this.attitude, rotate(this.attitude, BODY_X), target, ATTITUDE_CONTROL, feedForward);
+    if (bankRate === 0) return command;
+    // 倾侧角变化 = 整舱绕速度方向 v̂ 转动 σ̇。头部的摆动已由上面的前馈给出，这里补上绕舱体轴线的分量：
+    // σ̇·(v̂·x̂) = −σ̇·cos α_t。
+    return vec3(command.x - bankRate * Math.cos(this.trimAngle), command.y, command.z);
+  }
+
+  /**
+   * 推进倾侧角一步：滚转键（Q / E）以 BANK_RATE 改变指令值，当前值沿最短路径趋近指令值。
+   * 返回本步的倾侧角变化率 [rad/s]。
+   */
+  private advanceBank(rollInput: number): number {
+    const limit = BANK_RATE * this.dt;
+    if (rollInput !== 0) this.bankCommand = wrapAngle(this.bankCommand + rollInput * limit);
+    const error = wrapAngle(this.bankCommand - this.bankAngle);
+    const change = Math.max(-limit, Math.min(limit, error));
+    this.bankAngle = wrapAngle(this.bankAngle + change);
+    return change / this.dt;
   }
 
   /**
@@ -1067,6 +1177,7 @@ export class Simulation {
     fm.noseY = this.forces.noseY;
     fm.noseZ = this.forces.noseZ;
     fm.pointing = this.attitudeMode;
+    fm.trim = { angle: this.trimAngle, bank: this.bankAngle };
     fm.parachuteArea = this.parachuteArea;
     fm.thrustVacuum = 0;
     fm.exitArea = 0;
@@ -1298,7 +1409,7 @@ export class Simulation {
   }
 
   private addDebris(init: {
-    kind: 'stage' | 'fairing';
+    kind: DebrisKind;
     stageIndex: number;
     half: -1 | 0 | 1;
     position: Vec3;
@@ -1368,7 +1479,7 @@ export class Simulation {
   }
 
   /**
-   * 结构性的构型变化（分级、抛罩）后，刷新热区归属、结构限值、接地限值与降落伞。
+   * 结构性的构型变化（分级、抛罩、抛大底）后，刷新热区归属、结构限值、接地限值、降落伞与配平迎角。
    * 归属发生变化的热区从环境温度重新开始：新暴露出来的表面此前被别的部件遮挡着。
    * （被抛掉的级上方那一级的箱壁其实一直暴露在外，这里忽略它在上升段积累的少量温升。）
    */
@@ -1384,6 +1495,8 @@ export class Simulation {
     this.landingLimits = configurationLandingLimits(this.vehicle, this.cfg);
     this.parachute = configurationParachute(this.vehicle, this.cfg);
     if (this.parachute && this.parachutePhase === 'none') this.parachutePhase = 'stowed';
+    this.trimAngle = configurationTrimAngle(this.vehicle, this.cfg);
+    if (this.attitudeMode === 'trim' && !(this.trimAngle > 0)) this.attitudeMode = 'manual';
     this.overloadTime = 0;
     this.pressureTime = 0;
     this.bendingTime = 0;

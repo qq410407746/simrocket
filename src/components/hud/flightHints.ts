@@ -5,7 +5,7 @@
 import type { Telemetry } from '@/game/telemetry/telemetry';
 import type { VehicleDefinition } from '@/game/vehicles/types';
 import { formatNumber } from '@/utils/format';
-import { thermalZoneLabel } from './thermalLabels';
+import { bankLabel, thermalZoneLabel } from './thermalLabels';
 
 export interface FlightHint {
   readonly text: string;
@@ -119,8 +119,8 @@ export const flightHint = (t: Telemetry | null, vehicle: VehicleDefinition): Fli
   return null;
 };
 
-/** 迎角大于该值 [rad] 视为"防热大底朝前"（大底正对来流时迎角为 180°）。 */
-const SHIELD_FORWARD_ANGLE = (155 * Math.PI) / 180;
+/** 迎角大于该值 [rad] 视为"防热大底朝前"（大底正对来流时迎角为 180°；配平再入时约 160°）。 */
+const SHIELD_FORWARD_ANGLE = (150 * Math.PI) / 180;
 
 /**
  * 返回阶段的提示：再入前的准备、再入中的状态、开伞。
@@ -129,7 +129,16 @@ const SHIELD_FORWARD_ANGLE = (155 * Math.PI) / 180;
 const returnHint = (t: Telemetry, vehicle: VehicleDefinition): FlightHint | null => {
   // —— 降落伞 ——
   const chute = t.parachute.phase;
-  if (chute === 'main') return { text: `主伞已张开：下降速度 ${formatNumber(Math.abs(t.verticalSpeed), 0)} m/s，等待着陆`, tone: 'info' };
+  // 大底已经抛掉，却还有明显的气动加热：舱底没有防热能力
+  if (!t.heatShieldAttached && vehicle.payload.kind === 'capsule' && t.referenceHeatFlux > 10_000) {
+    return { text: '防热大底已抛掉，舱底结构正直接受热：无法承受再入', tone: 'warn' };
+  }
+  if (chute === 'main') {
+    const descent = `主伞已张开：下降速度 ${formatNumber(Math.abs(t.verticalSpeed), 0)} m/s`;
+    return t.canJettisonHeatShield
+      ? { text: `${descent}。可以按 H 抛掉防热大底：减轻质量，落得更慢`, tone: 'info' }
+      : { text: `${descent}，等待着陆`, tone: 'info' };
+  }
   if (chute === 'drogue') return { text: '减速伞工作中：动压降低后主伞自动打开', tone: 'info' };
   const descending = t.verticalSpeed < 0;
   if (chute === 'lost' && descending && t.altitude < 30_000) return { text: '降落伞已损毁：无法减速着陆', tone: 'warn' };
@@ -156,8 +165,12 @@ const returnHint = (t: Telemetry, vehicle: VehicleDefinition): FlightHint | null
   if (stage) {
     return { text: `即将再入：按 空格 分离${stage.name}——只有返回舱的防热大底能承受再入加热`, tone: 'warn' };
   }
+  const canTrim = t.trimAngle > 0;
   if (t.angleOfAttack < SHIELD_FORWARD_ANGLE) {
-    return { text: '防热大底没有朝前：按 T 开启逆行保持，否则舱顶与侧壁会被烧毁', tone: 'warn' };
+    return {
+      text: `防热大底没有朝前：按 T 开启逆行保持${canTrim ? '（或按 Y 配平再入）' : ''}，否则舱顶与侧壁会被烧毁`,
+      tone: 'warn',
+    };
   }
   if (t.gLoad > 0.8 * t.structure.maxGLoad) {
     return { text: `过载 ${formatNumber(t.gLoad, 1)} g，接近结构限值 ${formatNumber(t.structure.maxGLoad, 0)} g：再入角过陡`, tone: 'warn' };
@@ -169,11 +182,19 @@ const returnHint = (t: Telemetry, vehicle: VehicleDefinition): FlightHint | null
   if (t.altitude < 45_000) {
     return { text: `减速中：马赫 ${formatNumber(t.mach, 1)}，过载 ${formatNumber(t.gLoad, 1)} g。降到亚声速（约 10 km 高度）后按 G 开伞`, tone: 'info' };
   }
+  const trimming = t.attitudeMode === 'trim';
   if (t.referenceHeatFlux > 50_000 && shield) {
+    const lift = trimming ? `配平再入（升阻比 ${formatNumber(t.liftToDrag, 2)}，倾侧 ${bankLabel(t.bankAngle)}）：Q / E 改变升力方向。` : '保持防热大底朝前。';
     return {
-      text: `再入中：保持防热大底朝前。过载 ${formatNumber(t.gLoad, 1)} g，烧蚀层剩余 ${formatNumber(shield.ablatorFraction * 100, 0)}%；降到亚声速后按 G 开伞`,
+      text: `再入中：${lift}过载 ${formatNumber(t.gLoad, 1)} g，烧蚀层剩余 ${formatNumber(shield.ablatorFraction * 100, 0)}%；降到亚声速后按 G 开伞`,
       tone: 'info',
     };
   }
-  return { text: '即将再入大气层：保持逆行（防热大底朝前）；降到亚声速后按 G 开伞', tone: 'info' };
+  if (trimming) {
+    return { text: `即将再入大气层：配平再入，倾侧 ${bankLabel(t.bankAngle)}。升力向上过载最小；降到亚声速后按 G 开伞`, tone: 'info' };
+  }
+  return {
+    text: `即将再入大气层：保持逆行（防热大底朝前）${canTrim ? '；按 Y 改为配平再入，利用升力把过载从约 8 g 降到约 4 g' : ''}；降到亚声速后按 G 开伞`,
+    tone: 'info',
+  };
 };

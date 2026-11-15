@@ -74,6 +74,8 @@ export interface HeatShieldDefinition {
   readonly noseRadius: number;
   /** 防热材料的热学特性（通常带烧蚀层）。 */
   readonly surface: ThermalSurfaceProperties;
+  /** 大底的质量 [kg]（烧蚀层 + 承力结构），已包含在返回舱干质量里。抛掉大底时飞行器减去这部分质量。 */
+  readonly mass: number;
 }
 
 /**
@@ -142,12 +144,22 @@ export interface CapsuleDefinition extends PayloadBase {
   /** 最大直径（防热大底处）[m] 与总高度 [m]。 */
   readonly geometry: CylinderGeometry;
   readonly heatShield: HeatShieldDefinition;
+  /**
+   * 质心位置：到舱底（防热大底顶点）的轴向距离 [m]，以及偏离对称轴的横向距离 [m]。
+   * 横向偏移使返回舱在再入时配平于一个非零迎角并产生升力（见 physics/aerodynamics/trim.ts）；
+   * 为 0 时是弹道式返回舱。
+   */
+  readonly centerOfMass: {
+    readonly height: number;
+    readonly lateralOffset: number;
+  };
   /** 舱顶的曲率半径 [m]。 */
   readonly apexRadius: number;
-  /** 舱顶与侧壁（背风面防热层）的热学特性。 */
+  /** 舱顶、侧壁（背风面防热层），以及抛掉防热大底后露出的舱底结构的热学特性。 */
   readonly thermal: {
     readonly apex: ThermalSurfaceProperties;
     readonly side: ThermalSurfaceProperties;
+    readonly aft: ThermalSurfaceProperties;
   };
   /** 降落伞；没有则为 null。 */
   readonly parachute: ParachuteDefinition | null;
@@ -289,6 +301,8 @@ export interface VehicleState {
   readonly payloadPropellantMass: number;
   /** 整流罩是否仍在（无整流罩的飞行器恒为 false）。 */
   readonly fairingAttached: boolean;
+  /** 防热大底是否仍在（没有防热大底的飞行器恒为 false）。 */
+  readonly heatShieldAttached: boolean;
   /** 当前工作级在 definition.stages 中的下标；全部分离后等于 stages.length（只剩载荷）。 */
   readonly activeStageIndex: number;
   /** 节流指令 [0, 1]。0 表示关机；介于 0 与发动机最小节流之间时按最小节流工作。 */
@@ -299,6 +313,10 @@ export interface VehicleState {
   readonly attitudeInput: AttitudeInput;
   /** 自动指向模式；'manual' 为手动（无输入时保持当前惯性姿态）。 */
   readonly attitudeMode: AttitudeMode;
+  /** 当前构型的配平迎角 [rad]（质心横向偏移决定）；不是单独的返回舱、或质心在轴线上时为 0。 */
+  readonly trimAngle: number;
+  /** 配平再入的倾侧角 [rad]，范围 (−π, π]：0 为升力向上，正值向右倾侧。 */
+  readonly bankAngle: number;
   readonly phase: FlightPhase;
   /** 当前总质量 [kg]。 */
   readonly mass: number;

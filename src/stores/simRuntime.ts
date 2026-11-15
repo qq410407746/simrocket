@@ -55,7 +55,8 @@ export const createSimulationConfig = (vehicle: VehicleDefinition, site: LaunchS
 /** 界面需要立即（而不是等到下一个 100 ms 周期）反映的离散状态。 */
 const discreteStateKey = (s: SimSnapshot): string =>
   `${s.paused}|${s.timeWarp}|${s.maxTimeWarp}|${s.vehicle.phase}|${s.vehicle.ignited}|${s.vehicle.activeStageIndex}|` +
-  `${s.vehicle.fairingAttached}|${s.vehicle.throttle.toFixed(3)}|${s.vehicle.attitudeMode}|` +
+  `${s.vehicle.fairingAttached}|${s.vehicle.heatShieldAttached}|${s.vehicle.parachute.phase}|` +
+  `${s.vehicle.throttle.toFixed(3)}|${s.vehicle.attitudeMode}|` +
   `${s.liftoffTime !== null}|${s.outcome !== null}`;
 
 class SimRuntime {
@@ -136,6 +137,11 @@ class SimRuntime {
   /** 开伞（减速伞 → 主伞）。 */
   deployParachute(): void {
     this.client?.send({ type: 'deployParachute' });
+  }
+
+  /** 抛掉防热大底。 */
+  jettisonHeatShield(): void {
+    this.client?.send({ type: 'jettisonHeatShield' });
   }
 
   stop(): void {

@@ -220,6 +220,65 @@ describe('操作提示', () => {
     }
   });
 
+  it('配平再入与抛大底：提示升力方向；主伞张开后提示可以抛大底，抛掉后不再提示', () => {
+    const config = configWith(orbitStartState(vehicle, site, epochJulianDate));
+    const sim = new Simulation(config);
+    const advance = (seconds: number) => {
+      for (let i = 0; i < Math.round(seconds / sim.dt) && sim.flightPhase === 'flight'; i++) sim.step();
+    };
+    const speed = () => Math.hypot(sim.getVehicleState().body.velocity.x, sim.getVehicleState().body.velocity.y, sim.getVehicleState().body.velocity.z);
+    sim.setAttitudeMode('retrograde');
+    advance(40);
+    sim.stage();
+    sim.setThrottle(1);
+    const v0 = speed();
+    while (v0 - speed() < 120) sim.step();
+    sim.setThrottle(0);
+    sim.stage();
+    advance(2);
+    while (sim.flightPhase === 'flight' && hud(sim, config).altitude > 135_000) advance(5);
+    // 逆行保持中：提示里给出配平再入这个选项
+    expect(hintText(sim, config)).toContain('按 Y 改为配平再入');
+    sim.setAttitudeMode('trim');
+    advance(30);
+    expect(hintText(sim, config)).toMatch(/^即将再入大气层：配平再入，倾侧 0° 升力向上/);
+    while (sim.flightPhase === 'flight' && hud(sim, config).referenceHeatFlux < 100_000) advance(2);
+    expect(hintText(sim, config)).toMatch(/^再入中：配平再入（升阻比 0\.3\d，倾侧 0° 升力向上）：Q \/ E 改变升力方向/);
+    while (sim.flightPhase === 'flight' && !hintText(sim, config).includes('已降到亚声速')) advance(1);
+    sim.deployParachute();
+    while (sim.flightPhase === 'flight' && sim.getVehicleState().parachute.phase !== 'main') advance(0.5);
+    expect(hintText(sim, config)).toMatch(/^主伞已张开：下降速度 \d+ m\/s。可以按 H 抛掉防热大底/);
+    sim.jettisonHeatShield();
+    advance(1);
+    expect(hintText(sim, config)).toMatch(/^主伞已张开：下降速度 \d+ m\/s，等待着陆$/);
+    while (sim.flightPhase === 'flight') advance(5);
+    expect(sim.flightOutcome?.kind).toBe('landed');
+  });
+
+  it('再入前就抛掉了大底：一旦开始受热就给出警告', () => {
+    const config = configWith(orbitStartState(vehicle, site, epochJulianDate));
+    const sim = new Simulation(config);
+    const speed = () => Math.hypot(sim.getVehicleState().body.velocity.x, sim.getVehicleState().body.velocity.y, sim.getVehicleState().body.velocity.z);
+    sim.setAttitudeMode('retrograde');
+    for (let i = 0; i < 2_000; i++) sim.step();
+    sim.stage();
+    sim.setThrottle(1);
+    const v0 = speed();
+    while (v0 - speed() < 120) sim.step();
+    sim.setThrottle(0);
+    sim.stage();
+    sim.jettisonHeatShield();
+    expect(sim.getVehicleState().heatShieldAttached).toBe(false);
+    let warned = false;
+    while (sim.flightPhase === 'flight' && sim.time < 4_000) {
+      sim.step();
+      if (Math.round(sim.time / sim.dt) % 50 === 0 && hintText(sim, config).startsWith('防热大底已抛掉，舱底结构正直接受热')) warned = true;
+    }
+    expect(warned).toBe(true);
+    expect(sim.flightOutcome?.cause).toBe('thermal-surface');
+    expect(sim.flightOutcome?.thermalZone).toBe('base');
+  });
+
   it('降到开伞高度但仍是超声速：提示等待，而不是提示开伞', () => {
     // 从 20 km 高度以马赫 2 俯冲的返回舱
     const speed = 600;

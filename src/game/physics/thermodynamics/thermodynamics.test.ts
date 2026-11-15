@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { atmosphereAt } from '../atmosphere/standardAtmosphere';
+import { DEG2RAD } from '../constants';
 import {
   AIR_SPECIFIC_HEAT,
   CYLINDER_FRACTION,
@@ -204,6 +205,37 @@ describe('热流在表面的分布', () => {
   it('余弦略超出 [−1, 1] 时不产生 NaN', () => {
     expect(exposure('side', 1.0000001)).toBe(SIDEWALL_FRACTION);
     expect(exposure('nose', -1.0000001)).toBe(LEEWARD_FRACTION);
+  });
+
+  it('锥形侧壁（向头部收缩）：头部朝前时迎着来流，大底朝前且迎角小于半锥角时躲在背风区', () => {
+    const theta = 22 * DEG2RAD;
+    const cosDegrees = (deg: number) => Math.cos(deg * DEG2RAD);
+    // 头部朝前：侧壁与来流成 θ 角，比圆柱侧壁热
+    expect(exposure('side', 1, theta)).toBeCloseTo(SIDEWALL_FRACTION + (CYLINDER_FRACTION - SIDEWALL_FRACTION) * Math.sin(theta) ** 1.5, 12);
+    expect(exposure('side', 1, theta)).toBeGreaterThan(exposure('side', 1));
+    // 大底正对来流：侧壁背对来流 θ
+    const shadowed = exposure('side', -1, theta);
+    expect(shadowed).toBeLessThan(SIDEWALL_FRACTION);
+    expect(shadowed).toBeGreaterThanOrEqual(LEEWARD_FRACTION);
+    // 偏离"大底正对来流"的角度恰好等于半锥角：迎风母线与来流平行
+    expect(exposure('side', cosDegrees(180 - 22), theta)).toBeCloseTo(SIDEWALL_FRACTION, 9);
+    // 20°（小于半锥角）仍在背风区；30° 已经迎风，但比同样迎角的圆柱侧壁凉得多
+    expect(exposure('side', cosDegrees(160), theta)).toBeLessThan(SIDEWALL_FRACTION);
+    const exposed = exposure('side', cosDegrees(150), theta);
+    expect(exposed).toBeGreaterThan(SIDEWALL_FRACTION);
+    expect(exposed).toBeLessThan(0.5 * exposure('side', cosDegrees(150)));
+    // 随偏离角单调上升，横向来流时接近圆柱的值
+    let previous = shadowed;
+    for (let offset = 2; offset <= 68; offset += 2) {
+      const value = exposure('side', cosDegrees(180 - offset), theta);
+      expect(value).toBeGreaterThanOrEqual(previous);
+      previous = value;
+    }
+    expect(exposure('side', cosDegrees(68), theta)).toBeCloseTo(CYLINDER_FRACTION, 9);
+    // 深度背风时不低于背风面的比例；半锥角只影响侧壁
+    expect(exposure('side', -1, 40 * DEG2RAD)).toBe(LEEWARD_FRACTION);
+    expect(exposure('nose', 0.5, theta)).toBe(exposure('nose', 0.5));
+    expect(exposure('base', -0.5, theta)).toBe(exposure('base', -0.5));
   });
 });
 
