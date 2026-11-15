@@ -15,6 +15,7 @@ import type {
 import { RAD2DEG } from '@/game/physics/constants';
 import type { FlightStats } from '@/game/simulation/types';
 import type { Telemetry } from '@/game/telemetry/telemetry';
+import { type Language, createTranslator } from '@/i18n/locale';
 import { formatNumber } from '@/utils/format';
 import { failureTitle } from './thermalLabels';
 
@@ -22,6 +23,9 @@ const km = (meters: number, digits = 0): string => formatNumber(meters / 1000, d
 const deg = (radians: number, digits = 1): string => formatNumber(radians * RAD2DEG, digits);
 
 export const CATEGORY_LABEL: Record<MissionCategory, string> = { suborbital: '亚轨道', orbital: '近地轨道', return: '返回' };
+
+export const categoryLabel = (category: MissionCategory, language: Language = 'zh'): string =>
+  createTranslator(language)(CATEGORY_LABEL[category], { suborbital: 'Suborbital', orbital: 'Low Earth orbit', return: 'Return' }[category]);
 
 export const OBJECTIVE_MARK: Record<ObjectiveStatus, { readonly mark: string; readonly tone: string }> = {
   pending: { mark: '○', tone: 'text-ink-dim' },
@@ -48,30 +52,33 @@ export const objectiveProgress = (
   t: Telemetry | null,
   stats: FlightStats | null,
   mission: MissionState | null,
+  language: Language = 'zh',
 ): string => {
+  const tr = createTranslator(language);
   if (status !== 'pending') return '';
   switch (spec.kind) {
     case 'reach-altitude': {
       const reached = Math.max(stats?.maxAltitude ?? 0, t?.altitude ?? 0);
-      return `最大高度 ${km(reached)} / ${km(spec.altitude)} km`;
+      return tr(`最大高度 ${km(reached)} / ${km(spec.altitude)} km`, `Max altitude ${km(reached)} / ${km(spec.altitude)} km`);
     }
     case 'orbit': {
       const orbit = t?.orbit;
-      if (!orbit) return `近地点 ≥ ${km(spec.minPeriapsis)} km`;
-      const parts = [`近地点 ${km(orbit.periapsisAltitude)} / ${km(spec.minPeriapsis)} km`];
+      if (!orbit) return tr(`近地点 ≥ ${km(spec.minPeriapsis)} km`, `Periapsis ≥ ${km(spec.minPeriapsis)} km`);
+      const parts = [tr(`近地点 ${km(orbit.periapsisAltitude)} / ${km(spec.minPeriapsis)} km`, `Periapsis ${km(orbit.periapsisAltitude)} / ${km(spec.minPeriapsis)} km`)];
       if (orbit.apoapsisAltitude > spec.maxApoapsis) {
-        parts.push(Number.isFinite(orbit.apoapsisAltitude) ? `远地点 ${km(orbit.apoapsisAltitude)} km（上限 ${km(spec.maxApoapsis)}）` : '逃逸轨道');
+        parts.push(Number.isFinite(orbit.apoapsisAltitude) ? tr(`远地点 ${km(orbit.apoapsisAltitude)} km（上限 ${km(spec.maxApoapsis)}）`, `Apoapsis ${km(orbit.apoapsisAltitude)} km (max ${km(spec.maxApoapsis)})`) : tr('逃逸轨道', 'Escape trajectory'));
       }
-      if (spec.inclination) parts.push(`倾角 ${deg(orbit.inclination)}° / ${deg(spec.inclination.target)}°`);
+      if (spec.inclination) parts.push(tr(`倾角 ${deg(orbit.inclination)}° / ${deg(spec.inclination.target)}°`, `Inclination ${deg(orbit.inclination)}° / ${deg(spec.inclination.target)}°`));
       if (mission && mission.orbitHoldSince !== null && t) {
-        parts.push(`确认中 ${formatNumber(Math.max(0, ORBIT_CONFIRM_TIME - (t.simTime - mission.orbitHoldSince)), 0)} s`);
+        const remaining = formatNumber(Math.max(0, ORBIT_CONFIRM_TIME - (t.simTime - mission.orbitHoldSince)), 0);
+        parts.push(tr(`确认中 ${remaining} s`, `Confirming ${remaining} s`));
       }
       return parts.join(' · ');
     }
     case 'land-capsule': {
       const chute = t?.parachute.phase;
-      if (chute === 'main') return '主伞已张开';
-      if (chute === 'drogue') return '减速伞工作中';
+      if (chute === 'main') return tr('主伞已张开', 'Main parachute open');
+      if (chute === 'drogue') return tr('减速伞工作中', 'Drogue parachute working');
       return '';
     }
   }
@@ -83,7 +90,15 @@ const FAILURE_TEXT: Record<MissionFailure, string> = {
   'out-of-propellant': '停在了不符合要求的轨道上，推进剂已经耗尽',
 };
 
-export const missionFailureText = (failure: MissionFailure | null): string => (failure ? FAILURE_TEXT[failure] : '');
+export const missionFailureText = (failure: MissionFailure | null, language: Language = 'zh'): string => {
+  if (!failure) return '';
+  const english: Record<MissionFailure, string> = {
+    destroyed: 'Vehicle destroyed',
+    'flight-ended': 'The flight ended before all primary objectives were completed',
+    'out-of-propellant': 'Propellant exhausted in an orbit that does not meet the requirements',
+  };
+  return createTranslator(language)(FAILURE_TEXT[failure], english[failure]);
+};
 
 /** 评分指标的数值显示；指标不存在时为"—"。 */
 export const metricText = (metric: MetricId | null, value: number | null): string => {
@@ -108,10 +123,11 @@ export const metricText = (metric: MetricId | null, value: number | null): strin
 };
 
 /** 日志条目的结局文字与颜色。 */
-export const logResult = (entry: Pick<FlightLogEntry, 'result' | 'cause' | 'missionStatus' | 'orbit'>): { readonly text: string; readonly tone: string } => {
-  if (entry.result === 'destroyed') return { text: entry.cause ? failureTitle(entry.cause) : '损毁', tone: 'text-danger' };
-  if (entry.result === 'landed') return { text: '安全着陆', tone: 'text-ok' };
-  return entry.orbit ? { text: '在轨', tone: 'text-data' } : { text: '飞行中退出', tone: 'text-ink-dim' };
+export const logResult = (entry: Pick<FlightLogEntry, 'result' | 'cause' | 'missionStatus' | 'orbit'>, language: Language = 'zh'): { readonly text: string; readonly tone: string } => {
+  const t = createTranslator(language);
+  if (entry.result === 'destroyed') return { text: entry.cause ? failureTitle(entry.cause, language) : t('损毁', 'Destroyed'), tone: 'text-danger' };
+  if (entry.result === 'landed') return { text: t('安全着陆', 'Safe landing'), tone: 'text-ok' };
+  return entry.orbit ? { text: t('在轨', 'In orbit'), tone: 'text-data' } : { text: t('飞行中退出', 'Exited in flight'), tone: 'text-ink-dim' };
 };
 
 /** 日志条目的日期显示：本地时间 月-日 时:分。无法解析时原样返回。 */
