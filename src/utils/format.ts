@@ -1,0 +1,132 @@
+/**
+ * 显示层的单位换算与格式化。核心计算一律使用 SI；只有在这里才换成 km、t、kN、° 等便于阅读的单位。
+ */
+import { RAD2DEG } from '@/game/physics/constants';
+import { unixMsFromJulianDate } from '@/game/physics/ephemeris/time';
+
+export interface Formatted {
+  readonly value: string;
+  readonly unit: string;
+}
+
+const PLACEHOLDER = '—';
+
+const fixed = (x: number, digits: number): string =>
+  x.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits });
+
+/** 距离/高度：< 10 km 用米，否则用千米。 */
+export const formatDistance = (metres: number): Formatted => {
+  if (!Number.isFinite(metres)) return { value: PLACEHOLDER, unit: 'm' };
+  const abs = Math.abs(metres);
+  if (abs < 10_000) return { value: fixed(metres, abs < 1000 ? 1 : 0), unit: 'm' };
+  if (abs < 1_000_000) return { value: fixed(metres / 1000, 2), unit: 'km' };
+  return { value: fixed(metres / 1000, 0), unit: 'km' };
+};
+
+/** 速度：< 10 km/s 以内统一用 m/s（航天习惯），保留一位小数。 */
+export const formatSpeed = (mps: number): Formatted => {
+  if (!Number.isFinite(mps)) return { value: PLACEHOLDER, unit: 'm/s' };
+  // 消除 −0.0 的显示
+  const v = Math.abs(mps) < 0.05 ? 0 : mps;
+  return { value: fixed(v, 1), unit: 'm/s' };
+};
+
+/** 质量：≥ 10 t 用吨。 */
+export const formatMass = (kg: number): Formatted => {
+  if (!Number.isFinite(kg)) return { value: PLACEHOLDER, unit: 'kg' };
+  if (Math.abs(kg) >= 10_000) return { value: fixed(kg / 1000, 1), unit: 't' };
+  return { value: fixed(kg, 0), unit: 'kg' };
+};
+
+/** 力：kN 或 MN。 */
+export const formatForce = (newtons: number): Formatted => {
+  if (!Number.isFinite(newtons)) return { value: PLACEHOLDER, unit: 'kN' };
+  if (Math.abs(newtons) >= 1e7) return { value: fixed(newtons / 1e6, 2), unit: 'MN' };
+  return { value: fixed(newtons / 1000, 0), unit: 'kN' };
+};
+
+export const formatNumber = (x: number, digits: number): string => (Number.isFinite(x) ? fixed(x, digits) : PLACEHOLDER);
+
+/** 角度（弧度输入）→ 度。 */
+export const formatAngle = (radians: number | null, digits = 1): string =>
+  radians === null || !Number.isFinite(radians) ? PLACEHOLDER : fixed(radians * RAD2DEG, digits);
+
+/** 纬度："28.50° N"。 */
+export const formatLatitude = (radians: number): string => {
+  if (!Number.isFinite(radians)) return PLACEHOLDER;
+  const deg = radians * RAD2DEG;
+  return `${fixed(Math.abs(deg), 2)}° ${deg >= 0 ? 'N' : 'S'}`;
+};
+
+/** 经度："80.60° W"。 */
+export const formatLongitude = (radians: number): string => {
+  if (!Number.isFinite(radians)) return PLACEHOLDER;
+  const deg = radians * RAD2DEG;
+  return `${fixed(Math.abs(deg), 2)}° ${deg >= 0 ? 'E' : 'W'}`;
+};
+
+const pad2 = (n: number): string => String(Math.floor(n)).padStart(2, '0');
+
+/** 时长 → "HH:MM:SS"（超过一天时为 "Dd HH:MM:SS"）。 */
+export const formatDuration = (seconds: number): string => {
+  if (!Number.isFinite(seconds)) return PLACEHOLDER;
+  const s = Math.max(0, Math.floor(seconds));
+  const days = Math.floor(s / 86_400);
+  const clock = `${pad2((s % 86_400) / 3600)}:${pad2((s % 3600) / 60)}:${pad2(s % 60)}`;
+  return days > 0 ? `${days}d ${clock}` : clock;
+};
+
+/** 儒略日 → "2026-04-12 14:52:24 UTC"。 */
+export const formatUtc = (julianDate: number): string => {
+  const ms = unixMsFromJulianDate(julianDate);
+  if (!Number.isFinite(ms)) return PLACEHOLDER;
+  const d = new Date(ms);
+  return (
+    `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())} ` +
+    `${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}:${pad2(d.getUTCSeconds())} UTC`
+  );
+};
+
+/** 压力：Pa / kPa。 */
+export const formatPressure = (pascal: number): Formatted => {
+  if (!Number.isFinite(pascal)) return { value: PLACEHOLDER, unit: 'kPa' };
+  if (Math.abs(pascal) < 100) return { value: fixed(pascal, 1), unit: 'Pa' };
+  return { value: fixed(pascal / 1000, 2), unit: 'kPa' };
+};
+
+/** 任务时间："T+ 00:02:32"；尚未起飞时为 "T− 00:00:00"。 */
+export const formatMissionTime = (seconds: number | null): string =>
+  seconds === null ? 'T− 00:00:00' : `T+ ${formatDuration(seconds)}`;
+
+/** 倒计时/时长的紧凑写法："12 s"、"3 m 05 s"、"1 h 27 m"、"2 d 03 h"。 */
+export const formatCountdown = (seconds: number | null): string => {
+  if (seconds === null || !Number.isFinite(seconds)) return PLACEHOLDER;
+  const s = Math.max(0, Math.round(seconds));
+  if (s < 60) return `${s} s`;
+  if (s < 3600) return `${Math.floor(s / 60)} m ${pad2(s % 60)} s`;
+  if (s < 86_400) return `${Math.floor(s / 3600)} h ${pad2((s % 3600) / 60)} m`;
+  return `${Math.floor(s / 86_400)} d ${pad2((s % 86_400) / 3600)} h`;
+};
+
+/** 高度（可为负或无穷）：近地点在地面以下时显示负值，开放轨道的远地点显示 "∞"。 */
+export const formatApsis = (metres: number): Formatted => {
+  if (metres === Infinity) return { value: '∞', unit: 'km' };
+  if (!Number.isFinite(metres)) return { value: PLACEHOLDER, unit: 'km' };
+  const km = metres / 1000;
+  return { value: fixed(km, Math.abs(km) < 10_000 ? 1 : 0), unit: 'km' };
+};
+
+/** 热流：< 1 MW/m² 用 kW/m²，以上用 MW/m²。 */
+export const formatHeatFlux = (wattsPerSquareMetre: number): Formatted => {
+  if (!Number.isFinite(wattsPerSquareMetre)) return { value: PLACEHOLDER, unit: 'kW/m²' };
+  const abs = Math.abs(wattsPerSquareMetre);
+  if (abs < 1e6) return { value: fixed(wattsPerSquareMetre / 1e3, abs < 1e4 ? 1 : 0), unit: 'kW/m²' };
+  return { value: fixed(wattsPerSquareMetre / 1e6, 2), unit: 'MW/m²' };
+};
+
+/** 温度：开尔文 → 摄氏度，取整。 */
+export const formatTemperature = (kelvin: number): string => (Number.isFinite(kelvin) ? fixed(kelvin - 273.15, 0) : PLACEHOLDER);
+
+/** 累积热载荷：MJ/m²。 */
+export const formatHeatLoad = (joulesPerSquareMetre: number): string =>
+  Number.isFinite(joulesPerSquareMetre) ? fixed(joulesPerSquareMetre / 1e6, joulesPerSquareMetre < 1e7 ? 1 : 0) : PLACEHOLDER;

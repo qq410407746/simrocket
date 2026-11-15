@@ -1,0 +1,86 @@
+@import 'tailwindcss';
+
+/*
+ * 视觉主题：现代航天任务控制中心。
+ * 深蓝黑背景 · 青蓝色数据 · 白色正文 · 橙色警告 · 红色危险 · 绿色正常。
+ * 只使用系统字体，不依赖外部字体服务（可离线、可静态部署）。
+ */
+@theme {
+  --color-void: #02040a;
+  --color-panel: #060c17;
+  --color-raised: #0c1728;
+  --color-line: #1c2e48;
+  --color-data: #5fd4ff;
+  --color-data-dim: #2a7ea6;
+  --color-ok: #46df8b;
+  --color-warn: #ffb347;
+  --color-danger: #ff5d5d;
+  --color-ink: #f1f5fa;
+  --color-ink-dim: #93a3ba;
+  --color-ink-faint: #56667e;
+
+  --font-sans: 'Inter', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', system-ui, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', 'Cascadia Mono', Menlo, Consolas, monospace;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: #000;
+}
+
+body {
+  font-family: var(--font-sans);
+  color: var(--color-ink);
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  overscroll-behavior: none;
+}
+
+canvas {
+  touch-action: none;
+  cursor: grab;
+}
+
+canvas:active {
+  cursor: grabbing;
+}
+
+/* 数字读数：等宽数字，数值变化时不抖动 */
+.readout {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+/* 面板角标装饰 */
+.panel-frame {
+  background:
+    linear-gradient(180deg, rgb(12 23 40 / 0.86), rgb(5 10 20 / 0.82));
+  box-shadow:
+    0 0 0 1px rgb(28 46 72 / 0.9),
+    0 12px 40px rgb(0 0 0 / 0.45),
+    inset 0 1px 0 rgb(95 212 255 / 0.08);
+}
+
+.scroll-thin {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-line) transparent;
+}
+
+@keyframes pulse-soft {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+.animate-pulse-soft {
+  animation: pulse-soft 1.6s ease-in-out infinite;
+}
