@@ -1,6 +1,6 @@
 # 系统架构
 
-本文档描述 Orbital Frontier 当前（阶段四完成时）的实际架构，以及它为后续阶段预留的扩展方式。
+本文档描述 Orbital Frontier 当前（阶段五完成时）的实际架构，以及它为后续阶段预留的扩展方式。
 
 ## 1. 设计原则
 
@@ -104,10 +104,12 @@
 | `setTimeWarp { warp }` | 设置时间倍率（1, 2, 5, 10, 100, 1000）；超过当前允许上限时被钳制 |
 | `setThrottle { throttle }` | 节流指令 0–1 |
 | `setAttitudeInput { input }` | 姿态操纵输入（俯仰 / 偏航 / 滚转，各 −1…1） |
-| `setAttitudeMode { mode }` | 自动指向模式：手动 / 顺行 / 逆行 / 法向 / 反法向 / 径向外 / 径向内 |
+| `setAttitudeMode { mode }` | 自动指向模式：手动 / 顺行 / 逆行 / 法向 / 反法向 / 径向外 / 径向内 / 配平再入 |
 | `stage` | 飞行序列的下一步：点火 → 分离当前级并点燃下一级 → 载荷发动机点火；当前级有推进剂但未启用时先启用它 |
 | `jettisonFairing` | 抛整流罩 |
 | `deployParachute` | 开伞：减速伞 → 主伞（只对已与推进级分离的返回舱有效） |
+| `jettisonHeatShield` | 抛掉防热大底（只对已与推进级分离的返回舱有效） |
+| `setBankAngle` | 配平再入的倾侧角指令 [rad]：0 升力向上，正值向右，π 升力向下 |
 | `dispose` | 结束会话 |
 
 模拟器 → 主线程（`SimEvent`）：
