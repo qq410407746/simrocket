@@ -49,15 +49,34 @@ export const FAIRING_SHELL: ThermalSurfaceProperties = {
   ablator: null,
 };
 
-/** 返回舱舱顶与侧壁：陶瓷隔热瓦 / 柔性隔热毡，承受背风面的中等热流。 */
+/**
+ * 返回舱舱顶与侧壁：陶瓷隔热瓦 / 柔性隔热毡，承受背风面的中等热流。
+ * 传热系数按 k/δ 估计：隔热瓦导热系数约 0.05–0.1 W/(m·K)、厚约 2–3 cm。
+ * 配平再入时侧壁斜对来流、受热几分钟，这个量级才能保证内部结构留有足够的裕度。
+ */
 export const CAPSULE_BACKSHELL: ThermalSurfaceProperties = {
   material: '隔热瓦',
   emissivity: 0.85,
   surfaceHeatCapacity: 5_000,
   interiorHeatCapacity: 18_000,
-  conductance: 8,
+  conductance: 4,
   maxSurfaceTemperature: 1_500,
   maxInteriorTemperature: 480,
+  ablator: null,
+};
+
+/**
+ * 返回舱的舱底结构：铝蜂窝承力板与薄隔热层，平时被防热大底盖着。
+ * 抛掉大底后它直接暴露在外：只能承受伞降阶段的低速气流，承受不了任何再入加热。
+ */
+export const CAPSULE_AFT_STRUCTURE: ThermalSurfaceProperties = {
+  material: '舱底结构（无防热）',
+  emissivity: 0.8,
+  surfaceHeatCapacity: 6_000,
+  interiorHeatCapacity: 15_000,
+  conductance: 30,
+  maxSurfaceTemperature: 600,
+  maxInteriorTemperature: 420,
   ablator: null,
 };
 

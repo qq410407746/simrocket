@@ -37,6 +37,36 @@ export const stageBurnTime = (stage: StageDefinition): number => {
 export const payloadStackHeight = (payload: PayloadDefinition): number =>
   payload.kind === 'satellite' ? payload.fairing.geometry.length : payload.geometry.length;
 
+/** 载荷质心到载荷底面的高度 [m]：返回舱取设计值，卫星取几何中心。 */
+export const payloadCenterOfMassHeight = (payload: PayloadDefinition): number =>
+  payload.kind === 'capsule' ? payload.centerOfMass.height : payload.geometry.length / 2;
+
+/** 防热大底的质心到舱底的高度 [m]（大底是贴着舱底的一个浅碟）。 */
+export const heatShieldCenterHeight = (payload: PayloadDefinition): number => (payload.geometry.length * CAPSULE_PROFILE.shieldHeight) / 2;
+
+/**
+ * 返回舱的外形比例（半径以最大半径为单位，高度以舱体总高为单位）：
+ * 防热大底占最下面一段，其上是略微收口的肩部，再往上是锥形侧壁，顶部是对接机构。
+ * 渲染层按同一组比例生成模型，热模型用它算出侧壁的半锥角。
+ */
+export const CAPSULE_PROFILE = {
+  /** 防热大底的高度。 */
+  shieldHeight: 0.13,
+  /** 锥形侧壁的起点（肩部）：高度与半径。 */
+  shoulderHeight: 0.2,
+  shoulderRadius: 0.985,
+  /** 锥形侧壁的终点：高度与半径。 */
+  topHeight: 0.86,
+  topRadius: 0.44,
+} as const;
+
+/** 返回舱锥形侧壁的半锥角 [rad]（向舱顶收缩）。 */
+export const capsuleSideAngle = (capsule: { readonly geometry: { readonly diameter: number; readonly length: number } }): number =>
+  Math.atan2(
+    ((CAPSULE_PROFILE.shoulderRadius - CAPSULE_PROFILE.topRadius) * capsule.geometry.diameter) / 2,
+    (CAPSULE_PROFILE.topHeight - CAPSULE_PROFILE.shoulderHeight) * capsule.geometry.length,
+  );
+
 /** 飞行器总高度 [m]。 */
 export const vehicleHeight = (vehicle: VehicleDefinition): number =>
   vehicle.stages.reduce((sum, s) => sum + s.geometry.length, 0) + payloadStackHeight(vehicle.payload);
@@ -148,6 +178,8 @@ export interface MassPropertiesInput {
   readonly stageAttached: readonly boolean[];
   readonly payloadPropellant: number;
   readonly fairingAttached: boolean;
+  /** 防热大底是否仍在；缺省为是。 */
+  readonly heatShieldAttached?: boolean;
 }
 
 /**
@@ -156,7 +188,8 @@ export interface MassPropertiesInput {
  * 模型：每个部件视为沿纵轴均匀分布的质量——
  *  - 级的干质量：位于该级几何中心；
  *  - 级的推进剂：贮箱占满整级长度，推进剂沉在底部，质心在液柱中点（长度随余量线性缩短）；
- *  - 载荷与整流罩：位于各自几何中心。
+ *  - 返回舱：位于其设计质心；抛掉防热大底后减去大底的质量（质心相应上移）；
+ *  - 卫星与整流罩：位于各自几何中心。
  * 这是一维近似，足以给出质心随推进剂消耗的移动趋势；转动惯量在阶段二加入。
  *
  * "底端"指当前仍连接的最低一级的底面，因此分级后高度基准会随之改变。
@@ -177,9 +210,14 @@ export const computeMassProperties = (vehicle: VehicleDefinition, input: MassPro
   });
 
   const { payload } = vehicle;
-  const payloadMass = payload.dryMass + Math.max(0, input.payloadPropellant);
+  let payloadMass = payload.dryMass + Math.max(0, input.payloadPropellant);
+  let payloadMoment = payloadMass * payloadCenterOfMassHeight(payload);
+  if (payload.kind === 'capsule' && input.heatShieldAttached === false) {
+    payloadMass -= payload.heatShield.mass;
+    payloadMoment -= payload.heatShield.mass * heatShieldCenterHeight(payload);
+  }
   mass += payloadMass;
-  moment += payloadMass * (base + payload.geometry.length / 2);
+  moment += payloadMass * base + payloadMoment;
 
   if (payload.kind === 'satellite' && input.fairingAttached) {
     mass += payload.fairing.mass;

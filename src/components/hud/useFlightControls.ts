@@ -13,13 +13,15 @@ export const FLIGHT_KEY_HINTS: readonly (readonly [string, string])[] = [
   ['空格', '点火 / 分级'],
   ['W S', '俯仰'],
   ['A D', '偏航'],
-  ['Q E', '滚转'],
+  ['Q E', '滚转 / 倾侧'],
   ['↑ ↓', '节流'],
   ['Z', '满推力'],
   ['X', '关机'],
   ['F', '抛整流罩'],
   ['G', '开伞'],
+  ['H', '抛大底'],
   ['R T', '顺行 / 逆行保持'],
+  ['Y', '配平再入'],
   ['M', '轨道地图'],
 ];
 
@@ -31,8 +33,9 @@ export const FLIGHT_KEY_HINTS: readonly (readonly [string, string])[] = [
  *   A / D     偏航：头部转向左 / 右（发射台上即向西 / 向东）
  *   Q / E     滚转
  *   ↑ / ↓     增大 / 减小节流；Z 满推力；X 关机
- *   F         抛整流罩；G 开伞（返回舱）
+ *   F         抛整流罩；G 开伞（返回舱）；H 抛防热大底（返回舱，主伞张开后）
  *   R / T     顺行 / 逆行保持（再按一次回到手动）
+ *   Y         配平再入：防热大底朝前并保持配平迎角，产生升力；此时 Q / E 改变倾侧角（升力的方向）
  *   M         轨道地图（再按一次回到跟随视角）
  *   P         暂停；, 与 . 调整时间倍率；1–5 / C 切换视角
  *
@@ -125,6 +128,16 @@ export const useFlightControls = (): void => {
         case 'KeyG':
           if (!e.repeat) simRuntime.deployParachute();
           break;
+        case 'KeyH':
+          if (!e.repeat) simRuntime.jettisonHeatShield();
+          break;
+        case 'KeyY': {
+          if (e.repeat) break;
+          const telemetry = useSimStore.getState().telemetry;
+          if (!telemetry || !(telemetry.trimAngle > 0)) break;
+          simRuntime.setAttitudeMode(telemetry.attitudeMode === 'trim' ? 'manual' : 'trim');
+          break;
+        }
         case 'KeyP':
           if (!e.repeat) simRuntime.setPaused(!useSimStore.getState().paused);
           break;

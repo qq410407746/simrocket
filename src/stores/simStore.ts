@@ -3,6 +3,7 @@
  * 渲染层不读这个 store，而是直接读 simRuntime 中的快照缓冲。
  */
 import { create } from 'zustand';
+import type { MissionScore, MissionState } from '@/game/missions/types';
 import type { FlightEvent, FlightOutcome, FlightStats, PredictedImpact, TimeWarp } from '@/game/simulation/types';
 import type { Telemetry } from '@/game/telemetry/telemetry';
 import type { SimulationExecution } from '@/workers/SimulationClient';
@@ -33,6 +34,13 @@ interface SimState {
   events: readonly FlightEvent[];
   /** 轨迹预测给出的落点（假设从现在起不再有推力）；没有预测或预测时段内不触地时为 null。 */
   predictedImpact: PredictedImpact | null;
+  /** 当前飞行所属任务的标识与状态；自由飞行时为 null。 */
+  missionId: string | null;
+  mission: MissionState | null;
+  /** 任务有结论（成功或失败）时的评分；之前为 null。 */
+  missionScore: MissionScore | null;
+  /** 玩家是否已经关掉了任务结果面板、选择继续飞行。 */
+  resultDismissed: boolean;
 }
 
 export const INITIAL_SIM_STATE: SimState = {
@@ -50,6 +58,10 @@ export const INITIAL_SIM_STATE: SimState = {
   outcome: null,
   events: [],
   predictedImpact: null,
+  missionId: null,
+  mission: null,
+  missionScore: null,
+  resultDismissed: false,
 };
 
 export const useSimStore = create<SimState>()(() => ({ ...INITIAL_SIM_STATE }));

@@ -4,12 +4,13 @@
  * 纯数据、纯函数——不依赖 Three.js，可单元测试。渲染组件只负责把部件画出来。
  * 外形尺寸全部来自 VehicleDefinition，因此模型高度、直径与物理模型使用的数值一致。
  *
- * 模型按"可分离单元"组织成分段：每个推进级、返回舱/卫星、整流罩的两个半罩。
+ * 模型按"可分离单元"组织成分段：每个推进级、返回舱（舱体与可抛的防热大底各一段）/卫星、整流罩的两个半罩。
  * 分级后，被抛掉的分段跟随对应的分离体运动，其余分段继续跟随飞行器。
  *
  * 模型坐标：+Y 沿箭体纵轴指向头部，y = 0 为分段底面；单位 m。
  * 与机体系的关系：模型 +Y = 机体 +X，模型 +X = 机体 −Y，模型 +Z = 机体 +Z。
  */
+import { CAPSULE_PROFILE } from '@/game/vehicles/analysis';
 import type { CapsuleDefinition, SatelliteDefinition, StageDefinition, VehicleDefinition } from '@/game/vehicles/types';
 
 export type RocketMaterial = 'paint' | 'dark' | 'accent' | 'nozzle' | 'heatShield' | 'metal' | 'foil' | 'solar';
@@ -48,7 +49,7 @@ export interface BoxPart {
 
 export type RocketPart = LathePart | NozzlePart | BoxPart;
 
-export type SectionKind = 'stage' | 'capsule' | 'satellite' | 'fairing';
+export type SectionKind = 'stage' | 'capsule' | 'heat-shield' | 'satellite' | 'fairing';
 
 /** 尾焰的出口：位置（相对分段底面）与出口半径 [m]。 */
 export interface PlumeExit {
@@ -208,19 +209,48 @@ const buildStage = (vehicle: VehicleDefinition, index: number, baseY: number): R
 const buildCapsule = (capsule: CapsuleDefinition, baseY: number): RocketSection => {
   const r = capsule.geometry.diameter / 2;
   const h = capsule.geometry.length;
+  // 外形比例与热模型共用（CAPSULE_PROFILE）：侧壁的半锥角决定它在再入时是否躲在大底的背风区里
+  const { shieldHeight, shoulderHeight, shoulderRadius, topHeight, topRadius } = CAPSULE_PROFILE;
   const parts: RocketPart[] = [
-    // 防热大底（朝下，发射时坐落在上面级顶部）
-    { kind: 'lathe', profile: [[0, 0], [r * 0.6, h * 0.015], [r * 0.93, h * 0.06], [r, h * 0.13]], material: 'heatShield' },
+    // 舱底结构：平时被防热大底盖住，抛掉大底后才露出来
+    { kind: 'lathe', profile: [[0, h * 0.075], [r * 0.55, h * 0.085], [r * 0.9, h * 0.11], [r, h * shieldHeight]], material: 'metal' },
     // 锥形侧壁
-    { kind: 'lathe', profile: [[r, h * 0.13], [r * 0.985, h * 0.2], [r * 0.44, h * 0.86]], material: 'paint' },
+    {
+      kind: 'lathe',
+      profile: [[r, h * shieldHeight], [r * shoulderRadius, h * shoulderHeight], [r * topRadius, h * topHeight]],
+      material: 'paint',
+    },
     // 侧壁上的识别色带
-    { kind: 'lathe', profile: [[r * 0.992, h * 0.2], [r * 0.925, h * 0.285]], material: 'accent' },
+    { kind: 'lathe', profile: [[r * 0.992, h * shoulderHeight], [r * 0.925, h * 0.285]], material: 'accent' },
     // 顶部对接机构
-    { kind: 'lathe', profile: [[r * 0.44, h * 0.86], [r * 0.4, h * 0.96], [r * 0.3, h], [0, h]], material: 'metal' },
+    { kind: 'lathe', profile: [[r * topRadius, h * topHeight], [r * 0.4, h * 0.96], [r * 0.3, h], [0, h]], material: 'metal' },
   ];
   // 飞船机动发动机的安装位置为简化处理：推力沿纵轴，尾焰从底部中心画出。
   const plumes: PlumeExit[] = capsule.engine ? [{ x: 0, y: 0, z: 0, radius: Math.max(0.12, r * 0.09) }] : [];
   return { id: capsule.id, kind: 'capsule', stageIndex: -1, half: 0, baseY, length: h, overhang: 0, parts, plumes };
+};
+
+/** 防热大底：单独的分段，可以被抛掉（朝下，发射时坐落在上面级顶部）。 */
+const buildHeatShield = (capsule: CapsuleDefinition, baseY: number): RocketSection => {
+  const r = capsule.geometry.diameter / 2;
+  const h = capsule.geometry.length;
+  return {
+    id: `${capsule.id}-heat-shield`,
+    kind: 'heat-shield',
+    stageIndex: -1,
+    half: 0,
+    baseY,
+    length: h * CAPSULE_PROFILE.shieldHeight,
+    overhang: 0,
+    parts: [
+      {
+        kind: 'lathe',
+        profile: [[0, 0], [r * 0.6, h * 0.015], [r * 0.93, h * 0.06], [r, h * CAPSULE_PROFILE.shieldHeight]],
+        material: 'heatShield',
+      },
+    ],
+    plumes: [],
+  };
 };
 
 const buildSatellite = (satellite: SatelliteDefinition, baseY: number): RocketSection => {
@@ -297,6 +327,7 @@ export const buildRocketLayout = (vehicle: VehicleDefinition): RocketLayout => {
   const { payload } = vehicle;
   if (payload.kind === 'capsule') {
     sections.push(buildCapsule(payload, y));
+    sections.push(buildHeatShield(payload, y));
     y += payload.geometry.length;
     maxRadius = Math.max(maxRadius, payload.geometry.diameter / 2);
   } else {

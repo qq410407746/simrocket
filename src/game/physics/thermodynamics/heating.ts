@@ -98,22 +98,33 @@ export const LEEWARD_FRACTION = 0.03;
 export const SIDEWALL_FRACTION = 0.05;
 /** 横向来流时，圆柱驻点线的热流相对同半径球头驻点值的比例（≈ 1/√2）。 */
 export const CYLINDER_FRACTION = Math.SQRT1_2;
+/** 侧壁背对来流的角度的正弦达到该值时，热流降到背风面的水平。 */
+const SHADOW_DEPTH = 0.25;
 
 /**
  * 某一热区的热流相对"以该区曲率半径计算的驻点热流"的比例 [0, 1]，由迎角决定。
  *
  *   头部：迎风时为 1，随 cos^1.5 α 下降，背风时降到 LEEWARD_FRACTION；
  *   底部：与头部相反（尾部朝前时为 1）——返回舱的防热大底就是它的"底部"；
- *   侧壁：顺流时为 SIDEWALL_FRACTION，横向来流时为 CYLINDER_FRACTION。
+ *   侧壁：取迎风一侧母线与来流的夹角 i（表面迎着来流为正）。圆柱侧壁 i = α；
+ *         向头部收缩、半锥角为 θ 的锥形侧壁 i = α + θ——头部朝前时侧壁迎着来流，
+ *         大底朝前（α → 180°）时 sin i = sin(α' − θ)，α' = 180° − α 为偏离"大底正对来流"的角度：
+ *         α' 小于半锥角时侧壁整个躲在大底的背风区里。
+ *           sin i ≥ 0：SIDEWALL_FRACTION → CYLINDER_FRACTION，随 sin^1.5 i 上升；
+ *           sin i < 0：由 SIDEWALL_FRACTION 降到 LEEWARD_FRACTION。
  *
  * 指数 1.5 来自牛顿流近似下热流随表面倾角的典型变化，是工程估计。
  * @param cosAlpha 迎角余弦（头部朝前为 +1）
+ * @param sideSlope 侧壁的半锥角 θ [rad]（向头部收缩为正；圆柱为 0）。只影响侧壁。
  */
-export const exposure = (zone: ThermalZoneId, cosAlpha: number): number => {
+export const exposure = (zone: ThermalZoneId, cosAlpha: number, sideSlope = 0): number => {
   const cos = Math.max(-1, Math.min(1, cosAlpha));
   if (zone === 'side') {
     const sin = Math.sqrt(1 - cos * cos);
-    return SIDEWALL_FRACTION + (CYLINDER_FRACTION - SIDEWALL_FRACTION) * sin ** 1.5;
+    // sin(α + θ)
+    const facing = sideSlope === 0 ? sin : sin * Math.cos(sideSlope) + cos * Math.sin(sideSlope);
+    if (facing >= 0) return SIDEWALL_FRACTION + (CYLINDER_FRACTION - SIDEWALL_FRACTION) * facing ** 1.5;
+    return SIDEWALL_FRACTION - (SIDEWALL_FRACTION - LEEWARD_FRACTION) * Math.min(1, -facing / SHADOW_DEPTH);
   }
   const facing = Math.max(0, zone === 'nose' ? cos : -cos);
   return LEEWARD_FRACTION + (1 - LEEWARD_FRACTION) * facing ** 1.5;

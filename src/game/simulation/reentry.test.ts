@@ -176,14 +176,15 @@ describe('升力', () => {
     }
   });
 
-  it('舱顶向地偏（升力向下）：轨迹更陡，而且随着航迹转动迎角越来越大，迎风的侧壁过热烧毁', () => {
-    const { sim } = flyEntry(configFor(frontier, entryState(7_800, 2.5, { ...capsuleOnly, noseOffsetDeg: -8 })), null);
+  it('舱顶向地偏（升力向下）：轨迹更陡，而且随着航迹转动迎角越来越大，升力把返回舱压进稠密大气，过载超过结构限值', () => {
+    const { sim, maxG } = flyEntry(configFor(frontier, entryState(7_800, 2.5, { ...capsuleOnly, noseOffsetDeg: -8 })), null);
     const outcome = sim.flightOutcome!;
     expect(outcome.kind).toBe('destroyed');
-    expect(outcome.cause).toBe('thermal-surface');
-    expect(outcome.thermalZone).toBe('side');
-    // 失效时迎角已偏离"大底正对来流"二十多度
+    expect(outcome.cause).toBe('overload');
+    expect(maxG).toBeGreaterThan(14);
     expect(outcome.altitude).toBeGreaterThan(30_000);
+    // 迎角仍小于侧壁的半锥角（约 22°）时，侧壁躲在大底的背风区里，不是先被烧毁的部位
+    expect(zone(sim, 'side').failure).toBeNull();
   });
 });
 
@@ -390,7 +391,7 @@ describe('再入：不同的速度、角度与热防护参数给出不同的结�
       ...frontier,
       payload: {
         ...(frontier.payload as CapsuleDefinition),
-        heatShield: { noseRadius: 4.6, surface: ablativeHeatShield(arealMass) },
+        heatShield: { noseRadius: 4.6, surface: ablativeHeatShield(arealMass), mass: 650 },
       },
     });
     const outcomeOf = (arealMass: number) => flyEntry(configFor(withShield(arealMass), entryState(7_800, 1.5, capsuleOnly)), 'retrograde').sim;
@@ -409,7 +410,7 @@ describe('再入：不同的速度、角度与热防护参数给出不同的结�
   it('曲率半径更小的防热大底热流更高（q̇ ∝ 1/√R_n）', () => {
     const withRadius = (noseRadius: number): VehicleDefinition => ({
       ...frontier,
-      payload: { ...(frontier.payload as CapsuleDefinition), heatShield: { noseRadius, surface: ablativeHeatShield(4) } },
+      payload: { ...(frontier.payload as CapsuleDefinition), heatShield: { noseRadius, surface: ablativeHeatShield(4), mass: 650 } },
     });
     const fluxOf = (noseRadius: number) =>
       flyEntry(configFor(withRadius(noseRadius), entryState(7_800, 1.5, capsuleOnly)), 'retrograde').sim.flightStats.maxHeatFlux;

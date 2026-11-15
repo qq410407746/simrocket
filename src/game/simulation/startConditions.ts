@@ -6,14 +6,14 @@
  * 此后的运动与从发射台飞上来完全一样，由同一个模拟器计算。
  */
 import { EARTH, STANDARD_GRAVITY } from '../physics/constants';
-import { greenwichMeanSiderealTime } from '../physics/ephemeris/time';
+import { greenwichMeanSiderealTime, julianDateForLocalSolarTime } from '../physics/ephemeris/time';
 import { type Geodetic, ecefToEci, enuBasisAt, geodeticToEcef } from '../physics/frames/frames';
 import { fromBasis } from '../physics/math/quat';
 import { negate, scale } from '../physics/math/vec3';
 import { circularSpeed } from '../physics/orbital/elements';
 import { analyzeVehicle } from '../vehicles/analysis';
 import type { VehicleDefinition } from '../vehicles/types';
-import type { InitialFlightState } from './types';
+import type { InitialFlightState, SimulationConfig } from './types';
 
 /** "从轨道开始"的轨道高度 [m]。 */
 export const ORBIT_START_ALTITUDE = 200_000;
@@ -60,5 +60,29 @@ export const orbitStartState = (vehicle: VehicleDefinition, site: Geodetic, epoc
       i === vehicle.stages.length - 1 ? Math.min(stage.propellantMass, remaining) : stage.propellantMass,
     ),
     fairingJettisoned: true,
+  };
+};
+
+/** 默认发射日期与地方平太阳时：上午的侧向光照下火箭与地表最有层次。 */
+export const DEFAULT_LAUNCH_DATE = { year: 2026, month: 4, day: 12 } as const;
+export const DEFAULT_LOCAL_SOLAR_HOURS = 9.5;
+
+/**
+ * 一次飞行的模拟配置：飞行器、发射场，以及从发射台还是从近地轨道出发。
+ * 历元取默认发射日期、发射场当地上午 9:30（地方平太阳时）。火箭无法入轨时"从轨道出发"退回到发射台。
+ */
+export const createFlightConfig = (vehicle: VehicleDefinition, site: Geodetic, start: 'pad' | 'orbit' = 'pad'): SimulationConfig => {
+  const epochJulianDate = julianDateForLocalSolarTime(
+    DEFAULT_LAUNCH_DATE.year,
+    DEFAULT_LAUNCH_DATE.month,
+    DEFAULT_LAUNCH_DATE.day,
+    DEFAULT_LOCAL_SOLAR_HOURS,
+    site.longitude,
+  );
+  return {
+    vehicle,
+    site,
+    epochJulianDate,
+    initialState: start === 'orbit' && canStartInOrbit(vehicle) ? orbitStartState(vehicle, site, epochJulianDate) : undefined,
   };
 };

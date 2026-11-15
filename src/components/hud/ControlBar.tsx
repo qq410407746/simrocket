@@ -101,7 +101,7 @@ const stageAction = (t: Telemetry | null, vehicle: VehicleDefinition): StageActi
   return { label: '无后续分级', hint: '', enabled: false, tone: 'normal' };
 };
 
-/** 飞行控制：点火/分级、节流阀、抛整流罩、开伞。姿态由键盘控制（见导航球下方的键位说明）。 */
+/** 飞行控制：点火/分级、节流阀、抛整流罩、开伞、抛防热大底。姿态由键盘控制（见导航球下方的键位说明）。 */
 function FlightControls() {
   const vehicle = getVehicleOrDefault(useGameStore((s) => s.vehicleId));
   const t = useSimStore((s) => s.telemetry);
@@ -127,6 +127,19 @@ function FlightControls() {
           : chute === 'main'
             ? '主伞已打开'
             : '降落伞已损毁';
+
+  const isCapsule = vehicle.payload.kind === 'capsule';
+  const shieldAttached = t?.heatShieldAttached ?? isCapsule;
+  const canJettisonShield = t?.canJettisonHeatShield ?? false;
+  // 抛大底的时机：主伞已经张开（再入加热早已结束）
+  const shieldTiming = chute === 'main';
+  const shieldHint = !shieldAttached
+    ? '防热大底已抛掉'
+    : !canJettisonShield
+      ? '只有与推进级分离后的返回舱可以抛防热大底'
+      : shieldTiming
+        ? '抛掉防热大底（H）：减轻质量，伞降速度更低'
+        : '抛掉防热大底（H）。警告：再入结束前抛掉大底，舱底会被烧毁——通常在主伞张开后进行';
 
   return (
     <div className="panel-frame pointer-events-auto flex items-center gap-2 rounded-lg px-2.5 py-2 backdrop-blur-md" data-testid="flight-controls">
@@ -185,6 +198,17 @@ function FlightControls() {
           className={chute === 'stowed' && chuteSafe && t.altitude < 12_000 ? '!border-ok !text-ok hover:!bg-ok/15' : chute === 'lost' ? '!text-danger' : ''}
         >
           {chuteLabel}
+        </HudButton>
+      )}
+      {isCapsule && (
+        <HudButton
+          disabled={!canJettisonShield}
+          onClick={() => simRuntime.jettisonHeatShield()}
+          title={shieldHint}
+          testId="heat-shield-button"
+          className={canJettisonShield && shieldTiming ? '!border-ok !text-ok hover:!bg-ok/15' : ''}
+        >
+          {shieldAttached ? '抛大底' : '已抛大底'}
         </HudButton>
       )}
     </div>

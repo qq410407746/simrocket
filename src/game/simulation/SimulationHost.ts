@@ -102,6 +102,12 @@ export class SimulationHost {
         case 'deployParachute':
           sim?.deployParachute();
           break;
+        case 'jettisonHeatShield':
+          sim?.jettisonHeatShield();
+          break;
+        case 'setBankAngle':
+          sim?.setBankAngle(command.angle);
+          break;
         case 'dispose':
           this.simulation = null;
           return;

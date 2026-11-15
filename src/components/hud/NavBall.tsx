@@ -11,6 +11,7 @@ import { simRuntime } from '@/stores/simRuntime';
 import { useSimStore } from '@/stores/simStore';
 import { formatAngle } from '@/utils/format';
 import { FLIGHT_KEY_HINTS } from './useFlightControls';
+import { bankLabel } from './thermalLabels';
 
 /**
  * 导航球：显示箭体姿态相对当地水平面的关系，以及轨道参考方向的标记。
@@ -283,12 +284,19 @@ const MODE_BUTTONS: readonly { mode: AttitudeMode; label: string; hint: string; 
   { mode: 'antinormal', label: '反法向', hint: '头部保持指向轨道面法向的反方向', color: 'text-[#ff6bd6]' },
   { mode: 'radial-out', label: '径向外', hint: '头部在轨道面内垂直于速度、指向远离地球的一侧', color: 'text-[#4be3ff]' },
   { mode: 'radial-in', label: '径向内', hint: '头部在轨道面内垂直于速度、指向地球一侧', color: 'text-[#4be3ff]' },
+  {
+    mode: 'trim',
+    label: '配平',
+    hint: '配平再入（Y）：防热大底朝前并保持配平迎角，产生升力、降低过载。Q / E 改变倾侧角（升力的方向）',
+    color: 'text-[#ffb347]',
+  },
 ];
 
 /** 自动指向模式选择。 */
 function AttitudeModeBar() {
   const mode = useSimStore((s) => s.telemetry?.attitudeMode ?? 'manual');
   const flying = useSimStore((s) => s.telemetry?.phase === 'flight');
+  const canTrim = useSimStore((s) => (s.telemetry?.trimAngle ?? 0) > 0);
   return (
     <div className="flex items-center gap-1" data-testid="attitude-modes">
       <span className="mr-0.5 text-[10px] tracking-[0.14em] text-ink-faint">指向</span>
@@ -298,8 +306,8 @@ function AttitudeModeBar() {
           <button
             key={button.mode}
             type="button"
-            disabled={!flying}
-            title={button.hint}
+            disabled={!flying || (button.mode === 'trim' && !canTrim)}
+            title={button.mode === 'trim' && !canTrim ? '配平再入只对已与推进级分离、质心有横向偏移的返回舱有效' : button.hint}
             aria-pressed={active}
             data-testid={`attitude-${button.mode}`}
             onClick={(e) => {
@@ -324,6 +332,9 @@ export function NavBall() {
   const heading = useSimStore((s) => s.telemetry?.heading ?? null);
   const altitude = useSimStore((s) => s.telemetry?.altitude ?? 0);
   const active = useSimStore((s) => s.telemetry !== null && (s.telemetry.phase === 'flight' || s.telemetry.phase === 'prelaunch'));
+  const trimming = useSimStore((s) => s.telemetry?.attitudeMode === 'trim');
+  const bank = useSimStore((s) => s.telemetry?.bankAngle ?? 0);
+  const trimAngle = useSimStore((s) => s.telemetry?.trimAngle ?? 0);
 
   return (
     <div className="pointer-events-none flex flex-col items-center gap-1.5" data-testid="navball">
@@ -355,9 +366,18 @@ export function NavBall() {
           <span className="readout text-[11px] text-ink-dim">
             航向 <span className="text-data">{heading === null ? '—' : `${String(Math.round(heading * RAD2DEG) % 360).padStart(3, '0')}°`}</span>
           </span>
-          <span className="text-[10px] text-ink-faint" title="顺行/逆行的参考速度：低空用相对地面的速度，高空用惯性（轨道）速度">
-            速度参考：{altitude < SURFACE_REFERENCE_ALTITUDE ? '相对地面' : '轨道'}
-          </span>
+          {trimming ? (
+            <span
+              className="readout text-[11px] text-ink-dim"
+              title={`配平迎角 ${formatAngle(trimAngle)}°（由质心偏移决定）。倾侧角 0° 升力向上，±180° 升力向下；Q / E 改变倾侧角`}
+            >
+              倾侧 <span className="text-[#ffb347]" data-testid="navball-bank">{bankLabel(bank)}</span>
+            </span>
+          ) : (
+            <span className="text-[10px] text-ink-faint" title="顺行/逆行的参考速度：低空用相对地面的速度，高空用惯性（轨道）速度">
+              速度参考：{altitude < SURFACE_REFERENCE_ALTITUDE ? '相对地面' : '轨道'}
+            </span>
+          )}
         </div>
         <AttitudeModeBar />
         <div className={`flex max-w-[500px] flex-wrap justify-center gap-x-2.5 gap-y-0.5 text-[10px] ${active ? 'text-ink-dim' : 'text-ink-faint'}`}>

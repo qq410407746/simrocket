@@ -12,6 +12,7 @@ import { DEG2RAD } from '@/game/physics/constants';
 import type { EngineDefinition, LandingLimits, StageDefinition, StructuralLimits, VehicleDefinition } from '@/game/vehicles/types';
 import {
   ALUMINUM_TANK_SKIN,
+  CAPSULE_AFT_STRUCTURE,
   CAPSULE_BACKSHELL,
   ENGINE_SECTION,
   FAIRING_SHELL,
@@ -132,9 +133,11 @@ const METEOR_S: VehicleDefinition = {
     // 无人返回舱：结构强度裕度大，能承受亚轨道弹道近乎垂直再入的十几个 g
     structure: { maxGLoad: 25, maxDynamicPressure: 200_000, maxBendingLoad: Infinity },
     // 亚轨道再入的热载荷很小：薄烧蚀层即可
-    heatShield: { noseRadius: 2.6, surface: ablativeHeatShield(0.6) },
+    heatShield: { noseRadius: 2.6, surface: ablativeHeatShield(0.6), mass: 150 },
+    // 质心在对称轴上：弹道式返回舱，没有升力（亚轨道近乎垂直的再入也用不上升力）
+    centerOfMass: { height: 0.75, lateralOffset: 0 },
     apexRadius: 0.35,
-    thermal: { apex: CAPSULE_BACKSHELL, side: CAPSULE_BACKSHELL },
+    thermal: { apex: CAPSULE_BACKSHELL, side: CAPSULE_BACKSHELL, aft: CAPSULE_AFT_STRUCTURE },
     parachute: {
       drogueDragArea: 14,
       mainDragArea: 480,
@@ -193,10 +196,12 @@ const FRONTIER_1: VehicleDefinition = {
     aero: { referenceArea: circleArea(3.8), dragCoefficient: 1.3, shape: 'blunt' },
     // 载人飞船：结构可承受约 14 g（弹道再入约 8–9 g；更陡的再入会超限）
     structure: { maxGLoad: 14, maxDynamicPressure: 150_000, maxBendingLoad: Infinity },
-    // 近地轨道再入级别的防热大底
-    heatShield: { noseRadius: 4.6, surface: ablativeHeatShield(4) },
+    // 近地轨道再入级别的防热大底（质量约占返回舱的 10%）
+    heatShield: { noseRadius: 4.6, surface: ablativeHeatShield(4), mass: 650 },
+    // 质心偏离对称轴 11 cm：再入时配平在约 20° 迎角，升阻比约 0.3（半弹道式 / 升力式再入）
+    centerOfMass: { height: 1.3, lateralOffset: 0.11 },
     apexRadius: 0.5,
-    thermal: { apex: CAPSULE_BACKSHELL, side: CAPSULE_BACKSHELL },
+    thermal: { apex: CAPSULE_BACKSHELL, side: CAPSULE_BACKSHELL, aft: CAPSULE_AFT_STRUCTURE },
     parachute: {
       drogueDragArea: 60,
       mainDragArea: 2_000,

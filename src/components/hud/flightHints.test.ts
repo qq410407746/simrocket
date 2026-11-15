@@ -220,6 +220,65 @@ describe('操作提示', () => {
     }
   });
 
+  it('配平再入与抛大底：提示升力方向；主伞张开后提示可以抛大底，抛掉后不再提示', () => {
+    const config = configWith(orbitStartState(vehicle, site, epochJulianDate));
+    const sim = new Simulation(config);
+    const advance = (seconds: number) => {
+      for (let i = 0; i < Math.round(seconds / sim.dt) && sim.flightPhase === 'flight'; i++) sim.step();
+    };
+    const speed = () => Math.hypot(sim.getVehicleState().body.velocity.x, sim.getVehicleState().body.velocity.y, sim.getVehicleState().body.velocity.z);
+    sim.setAttitudeMode('retrograde');
+    advance(40);
+    sim.stage();
+    sim.setThrottle(1);
+    const v0 = speed();
+    while (v0 - speed() < 120) sim.step();
+    sim.setThrottle(0);
+    sim.stage();
+    advance(2);
+    while (sim.flightPhase === 'flight' && hud(sim, config).altitude > 135_000) advance(5);
+    // 逆行保持中：提示里给出配平再入这个选项
+    expect(hintText(sim, config)).toContain('按 Y 改为配平再入');
+    sim.setAttitudeMode('trim');
+    advance(30);
+    expect(hintText(sim, config)).toMatch(/^即将再入大气层：配平再入，倾侧 0° 升力向上/);
+    while (sim.flightPhase === 'flight' && hud(sim, config).referenceHeatFlux < 100_000) advance(2);
+    expect(hintText(sim, config)).toMatch(/^再入中：配平再入（升阻比 0\.3\d，倾侧 0° 升力向上）：Q \/ E 改变升力方向/);
+    while (sim.flightPhase === 'flight' && !hintText(sim, config).includes('已降到亚声速')) advance(1);
+    sim.deployParachute();
+    while (sim.flightPhase === 'flight' && sim.getVehicleState().parachute.phase !== 'main') advance(0.5);
+    expect(hintText(sim, config)).toMatch(/^主伞已张开：下降速度 \d+ m\/s。可以按 H 抛掉防热大底/);
+    sim.jettisonHeatShield();
+    advance(1);
+    expect(hintText(sim, config)).toMatch(/^主伞已张开：下降速度 \d+ m\/s，等待着陆$/);
+    while (sim.flightPhase === 'flight') advance(5);
+    expect(sim.flightOutcome?.kind).toBe('landed');
+  });
+
+  it('再入前就抛掉了大底：一旦开始受热就给出警告', () => {
+    const config = configWith(orbitStartState(vehicle, site, epochJulianDate));
+    const sim = new Simulation(config);
+    const speed = () => Math.hypot(sim.getVehicleState().body.velocity.x, sim.getVehicleState().body.velocity.y, sim.getVehicleState().body.velocity.z);
+    sim.setAttitudeMode('retrograde');
+    for (let i = 0; i < 2_000; i++) sim.step();
+    sim.stage();
+    sim.setThrottle(1);
+    const v0 = speed();
+    while (v0 - speed() < 120) sim.step();
+    sim.setThrottle(0);
+    sim.stage();
+    sim.jettisonHeatShield();
+    expect(sim.getVehicleState().heatShieldAttached).toBe(false);
+    let warned = false;
+    while (sim.flightPhase === 'flight' && sim.time < 4_000) {
+      sim.step();
+      if (Math.round(sim.time / sim.dt) % 50 === 0 && hintText(sim, config).startsWith('防热大底已抛掉，舱底结构正直接受热')) warned = true;
+    }
+    expect(warned).toBe(true);
+    expect(sim.flightOutcome?.cause).toBe('thermal-surface');
+    expect(sim.flightOutcome?.thermalZone).toBe('base');
+  });
+
   it('降到开伞高度但仍是超声速：提示等待，而不是提示开伞', () => {
     // 从 20 km 高度以马赫 2 俯冲的返回舱
     const speed = 600;
@@ -253,14 +312,42 @@ describe('操作提示', () => {
     expect(sim.flightOutcome?.cause).toBe('bending');
   });
 
-  it('离轨后贴近地面下降时给出警告', () => {
-    const config = configWith({
-      position: vec3(EARTH.RADIUS + 15_000, 0, 0),
-      velocity: vec3(-200, 300, 0),
-      separatedStages: 2,
-    });
+  it('贴近地面下降：带着推进级（没有降落伞）给出警告；单独的返回舱则提示等待开伞', () => {
+    const descending = (separatedStages: number) => {
+      // 相对（随地球转动的）大气以 40 m/s 竖直下落
+      const config = configWith({ position: vec3(EARTH.RADIUS + 15_000, 0, 0), velocity: vec3(-40, EARTH.ROTATION_RATE * (EARTH.RADIUS + 15_000), 0), separatedStages });
+      const sim = new Simulation(config);
+      run(sim, 1);
+      return flightHint(hud(sim, config), vehicle);
+    };
+    expect(descending(1)).toEqual({ text: '正在下降，高度不足', tone: 'warn' });
+    // 返回舱：减速已经结束、还没降到开伞高度——告诉玩家在等什么
+    const capsule = descending(2);
+    expect(capsule?.tone).toBe('info');
+    expect(capsule?.text).toMatch(/^继续下落：降到 12 km 以下、马赫 0\.9 以下时按 G 开伞（现在 1[45]\.\d km，马赫 0\.\d\d）$/);
+  });
+
+  it('无动力的返回舱沿弹道上升：提示何时到达最高点，而不是提示点火', () => {
+    const meteor = getVehicleOrDefault('meteor-s');
+    const config: SimulationConfig = { vehicle: meteor, site, epochJulianDate };
     const sim = new Simulation(config);
-    run(sim, 1);
-    expect(flightHint(hud(sim, config), vehicle)).toEqual({ text: '正在下降，高度不足', tone: 'warn' });
+    sim.stage();
+    while (sim.flightPhase === 'flight' || sim.flightPhase === 'prelaunch') {
+      sim.step();
+      if (sim.getVehicleState().stages[0]?.propellantMass === 0) break;
+    }
+    // 燃尽：提示分离
+    expect(flightHint(hud(sim, config), meteor)?.text).toBe('芯级推进剂耗尽：按 空格 分离');
+    sim.stage();
+    while (hud(sim, config).altitude < 80_000) sim.step();
+    const coasting = flightHint(hud(sim, config), meteor);
+    expect(coasting?.tone).toBe('info');
+    expect(coasting?.text).toMatch(/^靠惯性上升中：约 \d+ s 后到达最高点（约 2\d\d km），之后落回大气层$/);
+    // 过了最高点：提示准备再入，不再提"顺行点火"
+    while (hud(sim, config).verticalSpeed >= 0) sim.step();
+    run(sim, 5);
+    const falling = flightHint(hud(sim, config), meteor)?.text ?? '';
+    expect(falling).toContain('将再入大气层');
+    expect(falling).not.toContain('顺行点火');
   });
 });

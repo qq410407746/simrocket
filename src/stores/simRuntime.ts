@@ -5,15 +5,20 @@
  *   UI 指令 ──▶ simRuntime ──postMessage──▶ Worker(SimulationHost → Simulation)
  *   Worker ──快照(≈60 Hz)──▶ simRuntime.snapshots ──(每帧插值)──▶ 渲染层
  *                                   └──(节流到 10 Hz)──▶ useSimStore ──▶ React UI
+ *                                                 └──▶ 任务判定、飞行记录仪 ──▶ 生涯存档
+ *
+ * 任务判定只读遥测、统计量与飞行结果（game/missions/tracker.ts），从不向物理线程发指令。
  */
 import type { LaunchSite } from '@/data/launchSites';
 import { launchSiteGeodetic } from '@/data/launchSites';
+import { buildLogEntry } from '@/game/missions/logbook';
+import { scoreMission } from '@/game/missions/scoring';
+import { createMissionState, missionMetrics, updateMission } from '@/game/missions/tracker';
+import type { MissionDefinition } from '@/game/missions/types';
 import type { AttitudeInput } from '@/game/physics/attitude/attitude';
 import type { AttitudeMode } from '@/game/physics/attitude/pointing';
-import { DEG2RAD } from '@/game/physics/constants';
-import { julianDateForLocalSolarTime } from '@/game/physics/ephemeris/time';
 import { RenderClock, SnapshotBuffer } from '@/game/simulation/interpolation';
-import { canStartInOrbit, orbitStartState } from '@/game/simulation/startConditions';
+import { createFlightConfig } from '@/game/simulation/startConditions';
 import type {
   SimEvent,
   SimSnapshot,
@@ -21,41 +26,35 @@ import type {
   TimeWarp,
   TrajectoryPrediction,
 } from '@/game/simulation/types';
+import { FlightRecorder, sampleFlight } from '@/game/telemetry/flightRecorder';
 import { deriveTelemetry } from '@/game/telemetry/telemetry';
 import { ThermalHistory, sampleThermal } from '@/game/telemetry/thermalHistory';
 import type { VehicleDefinition } from '@/game/vehicles/types';
-import type { StartMode } from './gameStore';
 import { SimulationClient } from '@/workers/SimulationClient';
+import { useCareerStore } from './careerStore';
+import type { StartMode } from './gameStore';
 import { EVENT_LOG_LIMIT, INITIAL_SIM_STATE, useSimStore } from './simStore';
 
 /** UI 遥测刷新间隔 [ms]。 */
 const TELEMETRY_INTERVAL_MS = 100;
 
-/** 默认发射日期与地方平太阳时：上午的侧向光照下火箭与地表最有层次。 */
-const DEFAULT_LAUNCH_DATE = { year: 2026, month: 4, day: 12 } as const;
-const DEFAULT_LOCAL_SOLAR_HOURS = 9.5;
+export const createSimulationConfig = (vehicle: VehicleDefinition, site: LaunchSite, start: StartMode = 'pad'): SimulationConfig =>
+  createFlightConfig(vehicle, launchSiteGeodetic(site), start);
 
-export const createSimulationConfig = (vehicle: VehicleDefinition, site: LaunchSite, start: StartMode = 'pad'): SimulationConfig => {
-  const epochJulianDate = julianDateForLocalSolarTime(
-    DEFAULT_LAUNCH_DATE.year,
-    DEFAULT_LAUNCH_DATE.month,
-    DEFAULT_LAUNCH_DATE.day,
-    DEFAULT_LOCAL_SOLAR_HOURS,
-    site.longitudeDeg * DEG2RAD,
-  );
-  const geodetic = launchSiteGeodetic(site);
-  return {
-    vehicle,
-    site: geodetic,
-    epochJulianDate,
-    initialState: start === 'orbit' && canStartInOrbit(vehicle) ? orbitStartState(vehicle, geodetic, epochJulianDate) : undefined,
-  };
-};
+/** 一次飞行的背景：从哪个发射场、以哪种方式出发、属于哪个任务。写进飞行日志。 */
+export interface FlightContext {
+  readonly siteId: string;
+  readonly start: StartMode;
+  readonly mission: MissionDefinition | null;
+}
+
+const NO_CONTEXT: FlightContext = { siteId: '', start: 'pad', mission: null };
 
 /** 界面需要立即（而不是等到下一个 100 ms 周期）反映的离散状态。 */
 const discreteStateKey = (s: SimSnapshot): string =>
   `${s.paused}|${s.timeWarp}|${s.maxTimeWarp}|${s.vehicle.phase}|${s.vehicle.ignited}|${s.vehicle.activeStageIndex}|` +
-  `${s.vehicle.fairingAttached}|${s.vehicle.throttle.toFixed(3)}|${s.vehicle.attitudeMode}|` +
+  `${s.vehicle.fairingAttached}|${s.vehicle.heatShieldAttached}|${s.vehicle.parachute.phase}|` +
+  `${s.vehicle.throttle.toFixed(3)}|${s.vehicle.attitudeMode}|` +
   `${s.liftoffTime !== null}|${s.outcome !== null}`;
 
 class SimRuntime {
@@ -70,6 +69,12 @@ class SimRuntime {
   prediction: TrajectoryPrediction | null = null;
   /** 热流与温度的时间历程（约每模拟秒一个点，最近 10 分钟），供热防护面板画曲线。 */
   readonly thermalHistory = new ThermalHistory(600, 1);
+  /** 整次飞行的高度、速度、过载、热流记录（非响应式），供结果面板画曲线。 */
+  readonly flightRecorder = new FlightRecorder(720, 1);
+  /** 当前飞行的背景与标识。 */
+  context: FlightContext = NO_CONTEXT;
+  private flightId = '';
+  private flightCounter = 0;
 
   private client: SimulationClient | null = null;
   private lastTelemetryMs = -Infinity;
@@ -77,12 +82,18 @@ class SimRuntime {
   /** 待补发的尾随遥测更新的定时器。 */
   private trailingTelemetry: ReturnType<typeof setTimeout> | null = null;
 
-  /** 以给定配置（重新）开始模拟。 */
-  start(config: SimulationConfig): void {
+  /** 以给定配置（重新）开始模拟。context 给出这次飞行属于哪个任务（没有则是自由飞行）。 */
+  start(config: SimulationConfig, context: FlightContext = NO_CONTEXT): void {
+    // 离开上一次飞行之前，把它记进飞行日志
+    this.logFlight();
     if (!this.client) this.client = new SimulationClient(this.handleEvent);
     this.config = config;
+    this.context = context;
+    this.flightCounter += 1;
+    this.flightId = `${Date.now().toString(36)}-${this.flightCounter}`;
     this.prediction = null;
     this.thermalHistory.clear();
+    this.flightRecorder.clear();
     this.cancelTrailingTelemetry();
     this.snapshots.clear();
     this.renderClock.reset();
@@ -93,13 +104,15 @@ class SimRuntime {
       status: 'starting',
       execution: this.client.execution,
       epochJulianDate: config.epochJulianDate,
+      missionId: context.mission?.id ?? null,
+      mission: context.mission ? createMissionState(context.mission) : null,
     });
     this.client.send({ type: 'init', config });
   }
 
-  /** 以当前配置重新开始（回到发射台）。 */
+  /** 以当前配置重新开始（回到发射台）。任务飞行重新开始的仍是同一个任务。 */
   restart(): void {
-    if (this.config) this.start(this.config);
+    if (this.config) this.start(this.config, this.context);
   }
 
   setPaused(paused: boolean): void {
@@ -138,12 +151,20 @@ class SimRuntime {
     this.client?.send({ type: 'deployParachute' });
   }
 
+  /** 抛掉防热大底。 */
+  jettisonHeatShield(): void {
+    this.client?.send({ type: 'jettisonHeatShield' });
+  }
+
   stop(): void {
+    this.logFlight();
     this.client?.dispose();
     this.client = null;
     this.config = null;
+    this.context = NO_CONTEXT;
     this.prediction = null;
     this.thermalHistory.clear();
+    this.flightRecorder.clear();
     this.cancelTrailingTelemetry();
     this.snapshots.clear();
     useSimStore.setState({ ...INITIAL_SIM_STATE });
@@ -152,9 +173,29 @@ class SimRuntime {
   private publishTelemetry(snapshot: SimSnapshot, config: SimulationConfig, now: number): void {
     this.lastTelemetryMs = now;
     this.lastDiscreteKey = discreteStateKey(snapshot);
+    const telemetry = deriveTelemetry(snapshot, config);
+    const previous = useSimStore.getState();
+    this.flightRecorder.record(sampleFlight(telemetry));
+
+    // 任务判定：只读遥测、统计量与飞行结果
+    const { mission } = this.context;
+    let missionState = previous.mission;
+    let missionScore = previous.missionScore;
+    let missionEnded = false;
+    if (mission && missionState) {
+      const input = { telemetry, stats: snapshot.stats, outcome: snapshot.outcome };
+      const next = updateMission(mission, missionState, input);
+      if (next.status !== 'active' && missionState.status === 'active') {
+        missionScore = scoreMission(mission, next, missionMetrics(mission, next, input));
+        missionEnded = true;
+      }
+      missionState = next;
+    }
+    const flightEnded = snapshot.outcome !== null && previous.outcome === null;
+
     useSimStore.setState({
       status: 'running',
-      telemetry: deriveTelemetry(snapshot, config),
+      telemetry,
       paused: snapshot.paused,
       timeWarp: snapshot.timeWarp,
       maxTimeWarp: snapshot.maxTimeWarp,
@@ -162,7 +203,42 @@ class SimRuntime {
       liftoffTime: snapshot.liftoffTime,
       stats: snapshot.stats,
       outcome: snapshot.outcome,
+      mission: missionState,
+      missionScore,
     });
+
+    if (missionEnded && mission && missionState && missionScore) {
+      useCareerStore.getState().recordMission(mission.id, missionScore, missionState.status === 'success');
+    }
+    // 任务有了结论、或飞行结束：写入（或更新）这次飞行的日志
+    if (missionEnded || flightEnded) this.logFlight();
+  }
+
+  /**
+   * 把当前飞行写进飞行日志（同一次飞行重复调用会更新同一条记录）。
+   * 还没有起飞、或"从轨道出发"后什么都没做（没有任何飞行事件）的飞行不记录。
+   */
+  private logFlight(): void {
+    const config = this.config;
+    const store = useSimStore.getState();
+    const { telemetry, stats } = store;
+    if (!config || !telemetry || !stats || store.liftoffTime === null) return;
+    if (store.events.length === 0 && store.outcome === null) return;
+    useCareerStore.getState().saveFlight(
+      buildLogEntry({
+        id: this.flightId,
+        date: new Date().toISOString(),
+        missionId: this.context.mission?.id ?? null,
+        vehicleId: config.vehicle.id,
+        siteId: this.context.siteId,
+        start: this.context.start,
+        telemetry,
+        stats,
+        outcome: store.outcome,
+        mission: store.mission,
+        score: store.missionScore,
+      }),
+    );
   }
 
   private cancelTrailingTelemetry(): void {
@@ -205,6 +281,7 @@ class SimRuntime {
         break;
       }
       case 'flightEvents': {
+        this.flightRecorder.addEvents(event.events);
         const events = [...useSimStore.getState().events, ...event.events];
         useSimStore.setState({ events: events.slice(-EVENT_LOG_LIMIT) });
         break;

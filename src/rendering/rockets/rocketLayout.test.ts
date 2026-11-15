@@ -60,9 +60,16 @@ describe('火箭外形生成', () => {
   it('飞船使用返回舱外形；有发动机的飞船带尾焰出口，无动力返回舱没有', () => {
     const frontier = VEHICLE_CATALOG.find((v) => v.id === 'frontier-1')!;
     const meteor = VEHICLE_CATALOG.find((v) => v.id === 'meteor-s')!;
-    const capsule = buildRocketLayout(frontier).sections.find((s) => s.kind === 'capsule')!;
-    expect(capsule.parts.some((p) => p.kind === 'lathe' && p.material === 'heatShield')).toBe(true);
+    const layout = buildRocketLayout(frontier);
+    const capsule = layout.sections.find((s) => s.kind === 'capsule')!;
     expect(capsule.plumes).toHaveLength(1);
+    // 防热大底是单独的分段（可以被抛掉），与舱体底面在同一高度；舱体自己带一块舱底结构
+    const shield = layout.sections.find((s) => s.kind === 'heat-shield')!;
+    expect(shield.parts.some((p) => p.kind === 'lathe' && p.material === 'heatShield')).toBe(true);
+    expect(shield.baseY).toBe(capsule.baseY);
+    expect(shield.length).toBeLessThan(capsule.length * 0.2);
+    expect(capsule.parts.some((p) => p.kind === 'lathe' && p.material === 'heatShield')).toBe(false);
+    expect(capsule.parts.some((p) => p.kind === 'lathe' && p.material === 'metal' && p.profile[0]?.[0] === 0)).toBe(true);
     expect(buildRocketLayout(meteor).sections.find((s) => s.kind === 'capsule')!.plumes).toHaveLength(0);
   });
 
