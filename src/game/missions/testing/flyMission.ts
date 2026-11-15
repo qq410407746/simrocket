@@ -37,6 +37,8 @@ export const flyMission = (
   site: Geodetic,
   makePilot: (sim: Simulation, config: SimulationConfig) => MissionPilot,
   timeout = 12_000,
+  /** 每次界面刷新（10 Hz）时调用：相当于玩家此刻在界面上看到的遥测与任务状态。 */
+  onRefresh?: (telemetry: Telemetry, state: MissionState) => void,
 ): MissionFlight => {
   const config = createFlightConfig(vehicle, site, mission.start);
   const sim = new Simulation(config);
@@ -55,6 +57,7 @@ export const flyMission = (
     if (++steps % HUD_REFRESH_STEPS === 0 || sim.flightPhase !== 'flight') {
       input = read();
       state = updateMission(mission, state, input);
+      onRefresh?.(input.telemetry, state);
     }
   }
   const metrics = missionMetrics(mission, state, input);

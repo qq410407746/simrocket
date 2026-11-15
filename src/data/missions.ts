@@ -56,6 +56,7 @@ const KARMAN_LINE: MissionDefinition = {
     '返回舱头朝上落回大气层，防热大底正好朝下。减速过程的过载可达十几个 g。',
     '降到约 10 km、提示"已降到亚声速"时按 G 开伞。',
   ],
+  ascent: { kind: 'vertical' },
   requires: [],
 };
 
@@ -108,6 +109,7 @@ const SUBORBITAL_HOP: MissionDefinition = {
     '越过最高点后落回大气层。保持逆行保持，直到减速结束。',
     '提示"已降到亚声速"时按 G 开伞；主伞张开后可以按 H 抛掉防热大底。',
   ],
+  ascent: { kind: 'kick', speed: 300, minAngleDeg: 10, maxAngleDeg: 15 },
   requires: ['karman-line'],
 };
 

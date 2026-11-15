@@ -99,6 +99,14 @@ export interface MissionDefinition {
   readonly flightPlan: readonly string[];
   /** 发射方向引导：目标倾角 [rad] 与向北 / 向南发射。不填表示向正东发射。 */
   readonly launch?: { readonly inclination: number; readonly direction: LaunchDirection };
+  /**
+   * 上升段的飞法（教学提示用）。不填表示标准的重力转弯：约 60 m/s 时倾斜 2–3°。
+   *  - vertical  全程竖直；
+   *  - kick      速度达到 speed [m/s] 时倾斜 minAngleDeg–maxAngleDeg [°]。
+   */
+  readonly ascent?:
+    | { readonly kind: 'vertical' }
+    | { readonly kind: 'kick'; readonly speed: number; readonly minAngleDeg: number; readonly maxAngleDeg: number };
   /** 解锁条件：这些任务全部完成后才能开始本任务。 */
   readonly requires: readonly string[];
 }

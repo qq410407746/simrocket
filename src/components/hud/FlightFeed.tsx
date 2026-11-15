@@ -1,10 +1,14 @@
+import { getLaunchSiteOrDefault } from '@/data/launchSites';
+import { findMission } from '@/data/missions';
 import { getVehicleOrDefault } from '@/data/vehicles';
+import { DEG2RAD } from '@/game/physics/constants';
 import type { FlightEvent } from '@/game/simulation/types';
 import type { VehicleDefinition } from '@/game/vehicles/types';
 import { useGameStore } from '@/stores/gameStore';
 import { useSimStore } from '@/stores/simStore';
 import { formatDuration } from '@/utils/format';
-import { flightHint } from './flightHints';
+import { missionFlightHint } from './missionHints';
+import { MissionStrip } from './MissionStrip';
 
 const stageName = (vehicle: VehicleDefinition, index: number): string => vehicle.stages[index]?.name ?? '';
 
@@ -48,19 +52,23 @@ const TONE: Partial<Record<FlightEvent['kind'], string>> = {
   'parachute-failed': 'text-danger',
 };
 
-/** 屏幕上方居中的操作提示与最近的飞行事件。 */
+/** 屏幕上方居中的任务条、操作提示与最近的飞行事件。 */
 export function FlightFeed() {
   const vehicle = getVehicleOrDefault(useGameStore((s) => s.vehicleId));
+  const site = getLaunchSiteOrDefault(useGameStore((s) => s.siteId));
   const telemetry = useSimStore((s) => s.telemetry);
   const events = useSimStore((s) => s.events);
   const liftoffTime = useSimStore((s) => s.liftoffTime);
+  const mission = findMission(useSimStore((s) => s.missionId)) ?? null;
+  const missionState = useSimStore((s) => s.mission);
   const mapMode = useGameStore((s) => s.cameraMode === 'map');
-  const hint = flightHint(telemetry, vehicle);
+  const hint = missionFlightHint(telemetry, vehicle, mission, missionState, site.latitudeDeg * DEG2RAD);
   const recent = events.slice(-4);
 
   return (
     // 地图视角下左上角是地图图例（宽 15rem）：提示与事件记录让到它的右边
     <div className={`pointer-events-none flex w-full flex-col items-center gap-2 ${mapMode ? 'pl-[15.75rem]' : ''}`}>
+      <MissionStrip />
       {hint && (
         <div
           className={`panel-frame max-w-full rounded-md px-3 py-1 text-center text-[12px] leading-snug backdrop-blur-md ${hint.tone === 'warn' ? 'text-warn' : 'text-data'}`}

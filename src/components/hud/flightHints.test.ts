@@ -312,14 +312,42 @@ describe('操作提示', () => {
     expect(sim.flightOutcome?.cause).toBe('bending');
   });
 
-  it('离轨后贴近地面下降时给出警告', () => {
-    const config = configWith({
-      position: vec3(EARTH.RADIUS + 15_000, 0, 0),
-      velocity: vec3(-200, 300, 0),
-      separatedStages: 2,
-    });
+  it('贴近地面下降：带着推进级（没有降落伞）给出警告；单独的返回舱则提示等待开伞', () => {
+    const descending = (separatedStages: number) => {
+      // 相对（随地球转动的）大气以 40 m/s 竖直下落
+      const config = configWith({ position: vec3(EARTH.RADIUS + 15_000, 0, 0), velocity: vec3(-40, EARTH.ROTATION_RATE * (EARTH.RADIUS + 15_000), 0), separatedStages });
+      const sim = new Simulation(config);
+      run(sim, 1);
+      return flightHint(hud(sim, config), vehicle);
+    };
+    expect(descending(1)).toEqual({ text: '正在下降，高度不足', tone: 'warn' });
+    // 返回舱：减速已经结束、还没降到开伞高度——告诉玩家在等什么
+    const capsule = descending(2);
+    expect(capsule?.tone).toBe('info');
+    expect(capsule?.text).toMatch(/^继续下落：降到 12 km 以下、马赫 0\.9 以下时按 G 开伞（现在 1[45]\.\d km，马赫 0\.\d\d）$/);
+  });
+
+  it('无动力的返回舱沿弹道上升：提示何时到达最高点，而不是提示点火', () => {
+    const meteor = getVehicleOrDefault('meteor-s');
+    const config: SimulationConfig = { vehicle: meteor, site, epochJulianDate };
     const sim = new Simulation(config);
-    run(sim, 1);
-    expect(flightHint(hud(sim, config), vehicle)).toEqual({ text: '正在下降，高度不足', tone: 'warn' });
+    sim.stage();
+    while (sim.flightPhase === 'flight' || sim.flightPhase === 'prelaunch') {
+      sim.step();
+      if (sim.getVehicleState().stages[0]?.propellantMass === 0) break;
+    }
+    // 燃尽：提示分离
+    expect(flightHint(hud(sim, config), meteor)?.text).toBe('芯级推进剂耗尽：按 空格 分离');
+    sim.stage();
+    while (hud(sim, config).altitude < 80_000) sim.step();
+    const coasting = flightHint(hud(sim, config), meteor);
+    expect(coasting?.tone).toBe('info');
+    expect(coasting?.text).toMatch(/^靠惯性上升中：约 \d+ s 后到达最高点（约 2\d\d km），之后落回大气层$/);
+    // 过了最高点：提示准备再入，不再提"顺行点火"
+    while (hud(sim, config).verticalSpeed >= 0) sim.step();
+    run(sim, 5);
+    const falling = flightHint(hud(sim, config), meteor)?.text ?? '';
+    expect(falling).toContain('将再入大气层');
+    expect(falling).not.toContain('顺行点火');
   });
 });
