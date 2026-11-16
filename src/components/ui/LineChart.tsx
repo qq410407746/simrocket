@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { useI18n } from '@/i18n';
 
 export interface ChartSeries {
   readonly label: string;
@@ -27,6 +28,7 @@ interface LineChartProps {
  * 硬件加速的二维画布与 WebGL 画面合成会造成长时间卡顿（阶段四实测），CPU 画布没有这个问题。
  */
 export function LineChart({ times, series, height = 84, testId, startLabel, endLabel }: LineChartProps) {
+  const { t } = useI18n();
   const ref = useRef<HTMLCanvasElement | null>(null);
 
   useEffect(() => {
@@ -86,7 +88,7 @@ export function LineChart({ times, series, height = 84, testId, startLabel, endL
           <span key={line.label} className="flex items-center gap-1 whitespace-nowrap text-ink-dim">
             <span className="inline-block h-[2px] w-3" style={{ backgroundColor: line.color }} />
             {line.label}
-            <span className="readout text-ink">最大 {line.peak}</span>
+            <span className="readout text-ink">{t('最大', 'Peak')} {line.peak}</span>
           </span>
         ))}
       </figcaption>

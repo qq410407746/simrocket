@@ -80,8 +80,15 @@ interface DebugState {
       longitude: number;
       time: number;
     };
-    stats: null | { maxGLoad: number; maxDynamicPressure: number; maxHeatFlux: number; maxSurfaceTemperature: number };
+    stats: null | { maxGLoad: number; maxDynamicPressure: number; maxHeatFlux: number; maxSurfaceTemperature: number; maxAltitude: number };
     predictedImpact: null | { time: number; latitude: number; longitude: number; speed: number };
+    missionId: string | null;
+    mission: null | {
+      status: string;
+      failure: string | null;
+      objectives: { id: string; status: string; resolvedAt: number | null }[];
+    };
+    missionScore: null | { total: number; grade: string; items: { id: string; points: number; weight: number }[] };
   };
   debrisCount: number;
   fps: number;
@@ -121,6 +128,7 @@ const readState = (page: Page): Promise<DebugState | null> =>
               maxDynamicPressure: sim.stats.maxDynamicPressure,
               maxHeatFlux: sim.stats.maxHeatFlux,
               maxSurfaceTemperature: sim.stats.maxSurfaceTemperature,
+              maxAltitude: sim.stats.maxAltitude,
             }
           : null,
         outcome: sim.outcome
@@ -136,6 +144,21 @@ const readState = (page: Page): Promise<DebugState | null> =>
             }
           : null,
         predictedImpact: sim.predictedImpact,
+        missionId: sim.missionId,
+        mission: sim.mission
+          ? {
+              status: sim.mission.status,
+              failure: sim.mission.failure,
+              objectives: sim.mission.objectives.map((o) => ({ id: o.id, status: o.status, resolvedAt: o.resolvedAt })),
+            }
+          : null,
+        missionScore: sim.missionScore
+          ? {
+              total: sim.missionScore.total,
+              grade: sim.missionScore.grade,
+              items: sim.missionScore.items.map((item) => ({ id: item.id, points: item.points, weight: item.weight })),
+            }
+          : null,
       },
       debrisCount: frame.debris.length,
       fps: perf.fps,
@@ -174,7 +197,8 @@ const waitForRunning = async (page: Page): Promise<void> => {
     .toBe(true);
 };
 
-const startApp = async (page: Page): Promise<string[]> => {
+/** 打开页面并等物理线程运行起来。主菜单停在默认的"任务"页签。 */
+const openApp = async (page: Page): Promise<string[]> => {
   const problems: string[] = [];
   page.on('pageerror', (e) => problems.push(`pageerror: ${e.message}`));
   page.on('console', (m) => {
@@ -182,6 +206,16 @@ const startApp = async (page: Page): Promise<string[]> => {
   });
   await page.goto('/', { waitUntil: 'load' });
   await waitForRunning(page);
+  // These flight smoke tests exercise the sandbox, now a separate main-menu tab.
+  await page.getByTestId('tab-sandbox').click();
+  return problems;
+};
+
+/** 打开页面并切到"自由飞行"页签（选择火箭、发射场与出发点）。 */
+const startApp = async (page: Page): Promise<string[]> => {
+  const problems = await openApp(page);
+  await page.getByTestId('tab-sandbox').click();
+  await expect(page.getByTestId('enter-flight')).toBeVisible();
   return problems;
 };
 
@@ -1046,5 +1080,287 @@ test.describe('再入与热防护（阶段四）', () => {
     await expect(page.getByTestId('parachute-button')).toBeDisabled();
     await expect(page.getByTestId('event-log')).toContainText('降落伞被撕毁');
     await expectAllFinite(page);
+  });
+});
+
+/** 读取浏览器里保存的生涯存档。 */
+const readCareer = (page: Page): Promise<{ progress: Record<string, { completed: boolean; bestScore: number; bestGrade: string | null; attempts: number }>; logbook: { missionId: string | null; result: string; score: number | null; grade: string | null }[] } | null> =>
+  page.evaluate(() => {
+    const raw = localStorage.getItem('orbital-frontier/career');
+    return raw ? (JSON.parse(raw) as { state: never }).state : null;
+  });
+
+test.describe('任务系统（阶段五）', () => {
+  test('任务菜单：默认显示任务列表与简报；未解锁的任务不能开始；"解锁全部"后可以', async ({ page }) => {
+    const problems = await openApp(page);
+    // 默认页签是"任务"，选中第一个任务，右侧是它的简报
+    await expect(page.getByTestId('tab-missions')).toHaveAttribute('aria-selected', 'true');
+    await expect(page.getByTestId('mission-list')).toBeVisible();
+    await expect(page.getByTestId('mission-progress')).toHaveText('已完成 0 / 7');
+    await expect(page.getByTestId('mission-karman-line')).toHaveAttribute('data-state', 'open');
+    await expect(page.getByTestId('mission-karman-line')).toHaveAttribute('aria-pressed', 'true');
+    for (const id of ['suborbital-hop', 'first-orbit', 'crew-return', 'orbital-flight', 'inclined-orbit', 'polar-orbit']) {
+      await expect(page.getByTestId(`mission-${id}`)).toHaveAttribute('data-state', 'locked');
+    }
+    await expect(page.getByTestId('briefing-title')).toHaveText('突破卡门线');
+    await expect(page.getByTestId('briefing-objectives')).toContainText('最大高度达到 100 km');
+    await expect(page.getByTestId('briefing-objectives')).toContainText('附加目标');
+    await expect(page.getByTestId('briefing-scoring')).toContainText('回收返回舱');
+    await expect(page.getByTestId('briefing-plan').locator('li')).toHaveCount(5);
+    await expect(page.getByTestId('start-mission')).toBeEnabled();
+    await expect(page.getByTestId('start-mission')).toHaveText('开始任务');
+
+    // 选中未解锁的任务：可以读简报，但不能开始，并说明需要先完成什么
+    await page.getByTestId('mission-polar-orbit').click();
+    await expect(page.getByTestId('briefing-title')).toHaveText('极地轨道');
+    await expect(page.getByTestId('start-mission')).toBeDisabled();
+    await expect(page.getByTestId('start-mission')).toContainText('需要先完成：指定倾角轨道');
+    // 发射方位说明：范登堡向南，理论方位角 183°，按 S，用 A 增大倾角
+    await expect(page.getByTestId('launch-note')).toContainText('183°');
+    await expect(page.getByTestId('launch-note')).toContainText('航向 180°');
+    await page.getByTestId('mission-inclined-orbit').click();
+    await expect(page.getByTestId('launch-note')).toContainText('043°');
+    await expect(page.getByTestId('launch-note')).toContainText('W + D');
+    await expect(page.getByTestId('launch-note')).toContainText('W + A');
+    await page.getByTestId('mission-first-orbit').click();
+    await expect(page.getByTestId('launch-note')).toHaveCount(0);
+
+    // 飞行记录是空的
+    await page.getByTestId('tab-logbook').click();
+    await expect(page.getByTestId('logbook-empty')).toBeVisible();
+    await expect(page.getByTestId('mission-briefing')).toHaveCount(0);
+
+    // "解锁全部任务"
+    await page.getByTestId('tab-missions').click();
+    await page.getByTestId('unlock-all').check();
+    await expect(page.getByTestId('mission-polar-orbit')).toHaveAttribute('data-state', 'open');
+    await page.getByTestId('mission-crew-return').click();
+    await expect(page.getByTestId('start-mission')).toBeEnabled();
+
+    // 开始"载人飞船返回"：直接在 200 km 轨道上，任务条与任务提示就位
+    await page.getByTestId('start-mission').click();
+    await expect(page.getByTestId('flight-hud')).toBeVisible();
+    await waitForRunning(page);
+    await expect.poll(async () => (await readState(page))!.sim.missionId).toBe('crew-return');
+    await expect.poll(async () => (await readState(page))!.sim.telemetry?.orbit?.classification ?? null).toBe('orbit');
+    const state = await expectAllFinite(page);
+    expect(state.sim.mission?.status).toBe('active');
+    expect(state.sim.mission?.objectives.map((o) => o.status)).toEqual(['pending']);
+    expect(Math.abs(state.sim.telemetry!.altitude - 200_000)).toBeLessThan(2_000);
+    await expect(page.getByTestId('mission-strip')).toContainText('任务 · 载人飞船返回');
+    await expect(page.getByTestId('objective-land')).toHaveAttribute('data-status', 'pending');
+    await expect(page.getByTestId('flight-hint')).toContainText('任务：返回地球。按 T 开启逆行保持');
+    // 点击任务名展开 / 收起飞行步骤
+    await expect(page.getByTestId('mission-plan')).toHaveCount(0);
+    await page.getByTestId('mission-title').click();
+    await expect(page.getByTestId('mission-plan').locator('li')).toHaveCount(5);
+    await page.getByTestId('mission-title').click();
+    await expect(page.getByTestId('mission-plan')).toHaveCount(0);
+    // 按 T：提示随之推进
+    await page.keyboard.press('KeyT');
+    await expect(page.getByTestId('flight-hint')).toContainText('逆行保持中');
+
+    // 回到主菜单：任务还没有结论，不计入任务进度；什么都没做的飞行不留记录
+    await page.getByTestId('menu-button').click();
+    await expect(page.getByTestId('main-menu')).toBeVisible();
+    await expect(page.getByTestId('mission-progress')).toHaveText('已完成 0 / 7');
+    const career = await readCareer(page);
+    expect(career?.progress['crew-return']).toBeUndefined();
+    expect(career?.logbook ?? []).toHaveLength(0);
+    // 刷新后"解锁全部"与选中的任务仍在
+    await page.reload({ waitUntil: 'load' });
+    await waitForRunning(page);
+    await expect(page.getByTestId('unlock-all')).toBeChecked();
+    await expect(page.getByTestId('mission-crew-return')).toHaveAttribute('aria-pressed', 'true');
+    expect(problems).toEqual([]);
+  });
+
+  test('完整的游戏循环：选任务 → 发射 → 完成目标 → 回收 → 评分 → 存档 → 解锁并开始下一个任务', async ({ page }) => {
+    test.setTimeout(420_000);
+    const problems = await openApp(page);
+    await page.getByTestId('start-mission').click();
+    await expect(page.getByTestId('flight-hud')).toBeVisible();
+    await waitForRunning(page);
+    await expect.poll(async () => (await readState(page))!.sim.missionId).toBe('karman-line');
+    // 任务规定的火箭与发射场：流星-S，酒泉
+    await expect(page.getByTestId('vehicle-panel')).toContainText('流星-S');
+    const pad = await expectAllFinite(page);
+    expect(pad.sim.telemetry!.phase).toBe('prelaunch');
+    expect(pad.sim.telemetry!.latitude * DEG).toBeCloseTo(40.96, 1);
+    await expect(page.getByTestId('mission-strip')).toContainText('任务 · 突破卡门线');
+    await expect(page.getByTestId('objective-altitude')).toContainText('最大高度 0 / 100 km');
+    await expect(page.getByTestId('objective-recover')).toContainText('附加');
+    await expect(page.getByTestId('flight-hint')).toHaveText('按 空格 点火起飞');
+
+    // 点火，竖直上升：提示保持竖直
+    await page.keyboard.press('Space');
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.phase).toBe('flight');
+    await page.getByTestId('warp-5').click();
+    await expect(page.getByTestId('flight-hint')).toContainText('保持竖直上升');
+    // 燃尽：分离返回舱
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.stagePropellant[0], { timeout: 120_000 }).toBe(0);
+    await expect(page.getByTestId('flight-hint')).toContainText('按 空格 分离');
+    await page.keyboard.press('Space');
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.activeStageIndex).toBe(1);
+
+    // 靠惯性越过 100 km：主要目标完成，任务仍在进行（附加目标还没有结论）
+    await page.getByTestId('warp-10').click();
+    await expect(page.getByTestId('objective-altitude')).toHaveAttribute('data-status', 'done', { timeout: 120_000 });
+    const reached = (await readState(page))!;
+    expect(reached.sim.stats!.maxAltitude).toBeGreaterThanOrEqual(100_000);
+    expect(reached.sim.mission?.status).toBe('active');
+    expect(reached.sim.missionScore).toBeNull();
+    await expect(page.getByTestId('flight-summary')).toHaveCount(0);
+    await expect(page.getByTestId('flight-hint')).toContainText('靠惯性上升中');
+
+    // 越过最高点，落回大气层；降到 4 km 以下开伞
+    await page.getByTestId('warp-1000').click();
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.verticalSpeed, { timeout: 120_000 }).toBeLessThan(-100);
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.altitude, { timeout: 200_000 }).toBeLessThan(4_000);
+    expect((await readState(page))!.sim.telemetry!.mach).toBeLessThan(0.9);
+    await page.keyboard.press('KeyG');
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.parachute.phase, { timeout: 60_000 }).toBe('main');
+    await expect(page.getByTestId('objective-recover')).toContainText('主伞已张开');
+
+    // 着陆：任务完成，结果面板给出评级、总分与各评分项
+    await expect.poll(async () => (await readState(page))!.sim.outcome?.kind ?? null, { timeout: 200_000 }).toBe('landed');
+    const done = await expectAllFinite(page);
+    expect(done.sim.mission?.status).toBe('success');
+    expect(done.sim.mission?.objectives.map((o) => o.status)).toEqual(['done', 'done']);
+    expect(done.sim.missionScore?.total).toBe(100);
+    expect(done.sim.missionScore?.grade).toBe('S');
+    expect(done.sim.stats!.maxAltitude).toBeGreaterThan(250_000);
+    await expect(page.getByTestId('mission-result')).toHaveAttribute('data-status', 'success');
+    await expect(page.getByTestId('mission-outcome')).toHaveText('突破卡门线');
+    await expect(page.getByTestId('mission-grade')).toHaveText('S');
+    await expect(page.getByTestId('mission-score')).toContainText('100');
+    await expect(page.getByTestId('mission-score-items').locator('tr')).toHaveCount(3);
+    await expect(page.getByTestId('mission-score-items')).toContainText('回收返回舱');
+    await expect(page.getByTestId('flight-outcome')).toHaveText('已着陆');
+    await expect(page.getByTestId('flight-stats')).toContainText('最大高度');
+    // 飞行记录曲线画出来了
+    await expect(page.getByTestId('chart-trajectory')).toBeVisible();
+    await expect(page.getByTestId('chart-loads')).toBeVisible();
+    await expect(page.getByTestId('chart-trajectory')).toContainText('高度');
+    const chart = await page.getByTestId('chart-trajectory').locator('canvas').screenshot();
+    expect(chart.byteLength).toBeGreaterThan(1_500);
+    await expect(page.getByTestId('summary-continue')).toHaveCount(0);
+
+    // 存档：任务完成、最好成绩、一条飞行记录
+    const career = (await readCareer(page))!;
+    expect(career.progress['karman-line']).toEqual({ completed: true, bestScore: 100, bestGrade: 'S', attempts: 1 });
+    expect(career.logbook).toHaveLength(1);
+    expect(career.logbook[0]).toMatchObject({ missionId: 'karman-line', result: 'landed', score: 100, grade: 'S' });
+
+    // "下一个任务"：解锁了"亚轨道飞行与回收"，直接开始（同一枚火箭，回到发射台）
+    await expect(page.getByTestId('summary-next')).toContainText('亚轨道飞行与回收');
+    await page.getByTestId('summary-next').click();
+    await expect.poll(async () => (await readState(page))!.sim.missionId).toBe('suborbital-hop');
+    await expect.poll(async () => (await readState(page))!.sim.telemetry?.phase ?? null).toBe('prelaunch');
+    await expect(page.getByTestId('flight-summary')).toHaveCount(0);
+    await expect(page.getByTestId('mission-strip')).toContainText('任务 · 亚轨道飞行与回收');
+    await expect(page.getByTestId('objective-land')).toHaveAttribute('data-status', 'pending');
+    expect((await readState(page))!.sim.mission?.objectives.map((o) => o.status)).toEqual(['pending', 'pending']);
+
+    // 回到主菜单：任务列表反映进度；飞行记录里有这次飞行
+    await page.getByTestId('menu-button').click();
+    await expect(page.getByTestId('mission-progress')).toHaveText('已完成 1 / 7');
+    await expect(page.getByTestId('mission-karman-line')).toHaveAttribute('data-state', 'completed');
+    await expect(page.getByTestId('mission-karman-line')).toContainText('S');
+    await expect(page.getByTestId('mission-suborbital-hop')).toHaveAttribute('data-state', 'open');
+    await expect(page.getByTestId('mission-first-orbit')).toHaveAttribute('data-state', 'locked');
+    await page.getByTestId('mission-karman-line').click();
+    await expect(page.getByTestId('briefing-record')).toContainText('最好成绩');
+    await expect(page.getByTestId('briefing-record')).toContainText('已飞 1 次');
+    await page.getByTestId('tab-logbook').click();
+    await expect(page.getByTestId('logbook-entry')).toHaveCount(1);
+    await expect(page.getByTestId('logbook-entry')).toContainText('突破卡门线');
+    await expect(page.getByTestId('logbook-entry')).toContainText('安全着陆');
+    await expect(page.getByTestId('logbook-entry')).toContainText('流星-S');
+
+    // 刷新页面：进度与记录仍在
+    await page.reload({ waitUntil: 'load' });
+    await waitForRunning(page);
+    await expect(page.getByTestId('logbook-entry')).toHaveCount(1);
+    await page.getByTestId('tab-missions').click();
+    await expect(page.getByTestId('mission-progress')).toHaveText('已完成 1 / 7');
+    await expect(page.getByTestId('mission-suborbital-hop')).toHaveAttribute('data-state', 'open');
+    expect(problems).toEqual([]);
+  });
+
+  test('任务失败：没到 100 km 就关机——结果面板说明原因，评级 F，不解锁下一个任务；可以再飞一次', async ({ page }) => {
+    test.setTimeout(240_000);
+    const problems = await openApp(page);
+    await page.getByTestId('start-mission').click();
+    await waitForRunning(page);
+    await expect.poll(async () => (await readState(page))!.sim.missionId).toBe('karman-line');
+    await page.keyboard.press('Space');
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.phase).toBe('flight');
+    await page.getByTestId('warp-5').click();
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.altitude, { timeout: 60_000 }).toBeGreaterThan(1_500);
+    // 关机：火箭落回地面
+    await page.keyboard.press('KeyX');
+    await page.getByTestId('warp-10').click();
+    await expect.poll(async () => (await readState(page))!.sim.outcome?.kind ?? null, { timeout: 150_000 }).toBe('destroyed');
+
+    const state = await expectAllFinite(page);
+    expect(state.sim.stats!.maxAltitude).toBeLessThan(100_000);
+    expect(state.sim.mission?.status).toBe('failed');
+    expect(state.sim.mission?.failure).toBe('destroyed');
+    expect(state.sim.missionScore).toMatchObject({ total: 0, grade: 'F' });
+    await expect(page.getByTestId('mission-result')).toHaveAttribute('data-status', 'failed');
+    await expect(page.getByTestId('mission-failure')).toHaveText('飞行器损毁');
+    await expect(page.getByTestId('mission-grade')).toHaveText('F');
+    await expect(page.getByTestId('mission-strip')).toHaveAttribute('data-status', 'failed');
+    await expect(page.getByTestId('objective-altitude')).toHaveAttribute('data-status', 'failed');
+    await expect(page.getByTestId('flight-outcome')).toHaveText('飞行器损毁');
+    await expect(page.getByTestId('flight-reasons')).toBeVisible();
+    // 失败不解锁下一个任务
+    await expect(page.getByTestId('summary-next')).toHaveCount(0);
+    const career = (await readCareer(page))!;
+    expect(career.progress['karman-line']).toEqual({ completed: false, bestScore: 0, bestGrade: null, attempts: 1 });
+    expect(career.logbook[0]).toMatchObject({ missionId: 'karman-line', result: 'destroyed', score: 0, grade: 'F' });
+
+    // 再飞一次：同一个任务，从发射台重新开始
+    await page.getByTestId('summary-restart').click();
+    await expect.poll(async () => (await readState(page))!.sim.telemetry?.phase ?? null).toBe('prelaunch');
+    await expect(page.getByTestId('flight-summary')).toHaveCount(0);
+    const again = (await readState(page))!;
+    expect(again.sim.missionId).toBe('karman-line');
+    expect(again.sim.mission?.status).toBe('active');
+    expect(again.sim.mission?.objectives.map((o) => o.status)).toEqual(['pending', 'pending']);
+    await expect(page.getByTestId('objective-altitude')).toHaveAttribute('data-status', 'pending');
+    expect(problems).toEqual([]);
+  });
+
+  test('自由飞行不带任务：没有任务条，结果面板没有评分；飞行结束后留下一条记录', async ({ page }) => {
+    test.setTimeout(240_000);
+    const problems = await startApp(page);
+    await page.getByTestId('vehicle-meteor-s').click();
+    await waitForRunning(page);
+    await enterFlight(page);
+    expect((await readState(page))!.sim.missionId).toBeNull();
+    expect((await readState(page))!.sim.mission).toBeNull();
+    await expect(page.getByTestId('mission-strip')).toHaveCount(0);
+    await page.keyboard.press('Space');
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.phase).toBe('flight');
+    await page.getByTestId('warp-5').click();
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.altitude, { timeout: 60_000 }).toBeGreaterThan(1_000);
+    await page.keyboard.press('KeyX');
+    await page.getByTestId('warp-10').click();
+    await expect.poll(async () => (await readState(page))!.sim.outcome?.kind ?? null, { timeout: 150_000 }).toBe('destroyed');
+    await expect(page.getByTestId('flight-summary')).toBeVisible();
+    await expect(page.getByTestId('mission-result')).toHaveCount(0);
+    await expect(page.getByTestId('flight-outcome')).toHaveText('飞行器损毁');
+    await expect(page.getByTestId('summary-restart')).toHaveText('重新发射');
+    await expect(page.getByTestId('flight-charts')).toBeVisible();
+    const career = (await readCareer(page))!;
+    expect(career.logbook).toHaveLength(1);
+    expect(career.logbook[0]).toMatchObject({ missionId: null, result: 'destroyed', score: null, grade: null });
+    expect(career.progress).toEqual({});
+    await page.getByTestId('summary-menu').click();
+    await page.getByTestId('tab-logbook').click();
+    await expect(page.getByTestId('logbook-entry')).toContainText('自由飞行');
+    expect(problems).toEqual([]);
   });
 });

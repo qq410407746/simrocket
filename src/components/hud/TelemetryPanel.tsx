@@ -1,4 +1,5 @@
 import { useSimStore } from '@/stores/simStore';
+import { useI18n } from '@/i18n';
 import {
   formatAngle,
   formatApsis,
@@ -14,26 +15,26 @@ import type { OrbitClass, OrbitTelemetry } from '@/game/telemetry/telemetry';
 import { Panel, SectionLabel } from '../ui/Panel';
 import { Readout, type Tone } from '../ui/Readout';
 
-const ORBIT_CLASS_LABEL: Record<OrbitClass, { text: string; tone: string; hint: string }> = {
+const ORBIT_CLASS_LABEL: Record<OrbitClass, { text: [string, string]; tone: string; hint: [string, string] }> = {
   suborbital: {
-    text: '亚轨道',
+    text: ['亚轨道', 'Suborbital'],
     tone: 'text-warn',
-    hint: '近地点在地面以下：不继续加速就会落回地面',
+    hint: ['近地点在地面以下：不继续加速就会落回地面', 'Periapsis is below ground: accelerate further or fall back to Earth'],
   },
   atmospheric: {
-    text: '近地点在大气层内',
+    text: ['近地点在大气层内', 'Atmospheric periapsis'],
     tone: 'text-warn',
-    hint: '近地点低于 100 km：会再入大气层',
+    hint: ['近地点低于 100 km：会再入大气层', 'Periapsis below 100 km: atmospheric reentry ahead'],
   },
   orbit: {
-    text: '在轨',
+    text: ['在轨', 'In orbit'],
     tone: 'text-ok',
-    hint: '近地点高于 100 km。低于约 160 km 时阻力仍然明显，轨道会逐渐衰减',
+    hint: ['近地点高于 100 km。低于约 160 km 时阻力仍然明显，轨道会逐渐衰减', 'Periapsis above 100 km. Drag is still significant below about 160 km and the orbit will decay'],
   },
   escape: {
-    text: '逃逸轨道',
+    text: ['逃逸轨道', 'Escape trajectory'],
     tone: 'text-data',
-    hint: '速度超过逃逸速度：不再返回地球',
+    hint: ['速度超过逃逸速度：不再返回地球', 'Above escape speed: no return to Earth'],
   },
 };
 
@@ -42,12 +43,13 @@ const ORBIT_CLASS_LABEL: Record<OrbitClass, { text: string; tone: string; hint: 
  * 只在自由飞行中给出；在大气层内飞行时它只是瞬时参考。
  */
 function OrbitSection({ orbit }: { orbit: OrbitTelemetry | null }) {
+  const { t } = useI18n();
   if (!orbit) {
     return (
       <>
-        <SectionLabel note="起飞后显示">轨道</SectionLabel>
-        <Readout label="远地点" code="Ap" value="—" unit="km" tone="plain" />
-        <Readout label="近地点" code="Pe" value="—" unit="km" tone="plain" />
+        <SectionLabel note={t('起飞后显示', 'After liftoff')}>{t('轨道', 'Orbit')}</SectionLabel>
+        <Readout label={t('远地点', 'Apoapsis')} code="Ap" value="—" unit="km" tone="plain" />
+        <Readout label={t('近地点', 'Periapsis')} code="Pe" value="—" unit="km" tone="plain" />
       </>
     );
   }
@@ -57,24 +59,24 @@ function OrbitSection({ orbit }: { orbit: OrbitTelemetry | null }) {
   const periapsisTone: Tone = orbit.classification === 'orbit' || orbit.classification === 'escape' ? 'ok' : 'warn';
   return (
     <>
-      <SectionLabel>轨道</SectionLabel>
-      <div className={`mb-1 text-[11px] ${status.tone}`} title={status.hint} data-testid="orbit-status">
-        {status.text}
+      <SectionLabel>{t('轨道', 'Orbit')}</SectionLabel>
+      <div className={`mb-1 text-[11px] ${status.tone}`} title={t(...status.hint)} data-testid="orbit-status">
+        {t(...status.text)}
       </div>
-      <Readout label="远地点" code="Ap" value={apoapsis.value} unit={apoapsis.unit} testId="readout-apoapsis" />
-      <Readout label="近地点" code="Pe" value={periapsis.value} unit={periapsis.unit} tone={periapsisTone} testId="readout-periapsis" />
-      <Readout label="到远地点" code="tAp" value={formatCountdown(orbit.timeToApoapsis)} tone="plain" />
-      <Readout label="到近地点" code="tPe" value={formatCountdown(orbit.timeToPeriapsis)} tone="plain" />
+      <Readout label={t('远地点', 'Apoapsis')} code="Ap" value={apoapsis.value} unit={apoapsis.unit} testId="readout-apoapsis" />
+      <Readout label={t('近地点', 'Periapsis')} code="Pe" value={periapsis.value} unit={periapsis.unit} tone={periapsisTone} testId="readout-periapsis" />
+      <Readout label={t('到远地点', 'To apoapsis')} code="tAp" value={formatCountdown(orbit.timeToApoapsis)} tone="plain" />
+      <Readout label={t('到近地点', 'To periapsis')} code="tPe" value={formatCountdown(orbit.timeToPeriapsis)} tone="plain" />
       <div className="flex items-baseline justify-between gap-3 py-[3px]">
         <span className="text-[12px] text-ink-dim">
-          倾角 <span className="text-[9px] tracking-wider text-ink-faint">I</span> · 偏心率 <span className="text-[9px] tracking-wider text-ink-faint">E</span>
+          {t('倾角', 'Incl.')} <span className="text-[9px] tracking-wider text-ink-faint">I</span> {t('· 偏心率', '· Ecc.')} <span className="text-[9px] tracking-wider text-ink-faint">E</span>
         </span>
         <span className="readout text-[13px] text-ink">
           <span data-testid="readout-inclination">{formatAngle(orbit.inclination, 2)}</span>°{' · '}
           <span data-testid="readout-eccentricity">{formatNumber(orbit.eccentricity, 4)}</span>
         </span>
       </div>
-      <Readout label="周期" code="T" value={Number.isFinite(orbit.period) ? formatCountdown(orbit.period) : '∞'} tone="plain" testId="readout-period" />
+      <Readout label={t('周期', 'Period')} code="T" value={Number.isFinite(orbit.period) ? formatCountdown(orbit.period) : '∞'} tone="plain" testId="readout-period" />
     </>
   );
 }
@@ -87,11 +89,12 @@ const loadTone = (value: number, limit: number, normal: Tone): Tone => (value > 
 
 /** 左侧飞行遥测面板。 */
 export function TelemetryPanel() {
+  const { t: tr } = useI18n();
   const t = useSimStore((s) => s.telemetry);
   if (!t) {
     return (
-      <Panel title="飞行遥测" code="Telemetry" className="w-64" testId="telemetry-panel">
-        <p className="animate-pulse-soft text-[12px] text-ink-faint">等待物理线程数据…</p>
+      <Panel title={tr('飞行遥测', 'Flight data')} code="Telemetry" className="w-64" testId="telemetry-panel">
+        <p className="animate-pulse-soft text-[12px] text-ink-faint">{tr('等待物理线程数据…', 'Waiting for physics data…')}</p>
       </Panel>
     );
   }
@@ -107,23 +110,23 @@ export function TelemetryPanel() {
   const inAir = t.airDensity > 1e-7 && t.surfaceSpeed > 1;
 
   return (
-    <Panel title="飞行遥测" code="Telemetry" className="w-64" testId="telemetry-panel">
-      <SectionLabel>位置与速度</SectionLabel>
-      <Readout label="高度" code="ALT" value={altitude.value} unit={altitude.unit} testId="readout-altitude" />
-      <Readout label="地面速度" code="SPD" value={surfaceSpeed.value} unit={surfaceSpeed.unit} testId="readout-surface-speed" />
+    <Panel title={tr('飞行遥测', 'Flight data')} code="Telemetry" className="w-64" testId="telemetry-panel">
+      <SectionLabel>{tr('位置与速度', 'Position & speed')}</SectionLabel>
+      <Readout label={tr('高度', 'Altitude')} code="ALT" value={altitude.value} unit={altitude.unit} testId="readout-altitude" />
+      <Readout label={tr('地面速度', 'Surface speed')} code="SPD" value={surfaceSpeed.value} unit={surfaceSpeed.unit} testId="readout-surface-speed" />
       <Readout
-        label="垂直速度"
+        label={tr('垂直速度', 'Vert. speed')}
         code="V/S"
         value={verticalSpeed.value}
         unit={verticalSpeed.unit}
         tone={t.verticalSpeed < -1 ? 'warn' : 'data'}
         testId="readout-vertical-speed"
       />
-      <Readout label="水平速度" code="H/S" value={horizontalSpeed.value} unit={horizontalSpeed.unit} />
-      <Readout label="惯性速度" code="ORB" value={inertialSpeed.value} unit={inertialSpeed.unit} testId="readout-inertial-speed" />
-      <Readout label="航程" code="DR" value={downrange.value} unit={downrange.unit} tone="plain" testId="readout-downrange" />
+      <Readout label={tr('水平速度', 'Horiz. speed')} code="H/S" value={horizontalSpeed.value} unit={horizontalSpeed.unit} />
+      <Readout label={tr('惯性速度', 'Orbit speed')} code="ORB" value={inertialSpeed.value} unit={inertialSpeed.unit} testId="readout-inertial-speed" />
+      <Readout label={tr('航程', 'Downrange')} code="DR" value={downrange.value} unit={downrange.unit} tone="plain" testId="readout-downrange" />
       <div className="flex items-baseline justify-between gap-3 py-[3px]">
-        <span className="text-[12px] text-ink-dim">星下点</span>
+        <span className="text-[12px] text-ink-dim">{tr('星下点', 'Subpoint')}</span>
         <span className="readout text-[13px] text-ink">
           <span data-testid="readout-latitude">{formatLatitude(t.latitude)}</span> <span data-testid="readout-longitude">{formatLongitude(t.longitude)}</span>
         </span>
@@ -131,9 +134,9 @@ export function TelemetryPanel() {
 
       <OrbitSection orbit={t.orbit} />
 
-      <SectionLabel>受力与气动</SectionLabel>
+      <SectionLabel>{tr('受力与气动', 'Loads & aero')}</SectionLabel>
       <Readout
-        label="过载"
+        label={tr('过载', 'G-load')}
         code="G"
         value={formatNumber(t.gLoad, 2)}
         unit="g"
@@ -141,23 +144,23 @@ export function TelemetryPanel() {
         testId="readout-gload"
       />
       <Readout
-        label="动压"
+        label={tr('动压', 'Dyn. pressure')}
         code="Q"
         value={dynamicPressure.value}
         unit={dynamicPressure.unit}
         tone={loadTone(t.dynamicPressure, t.structure.maxDynamicPressure, 'data')}
         testId="readout-dynamic-pressure"
       />
-      <Readout label="马赫数" code="M" value={inAir ? formatNumber(t.mach, 2) : '—'} tone="plain" testId="readout-mach" />
+      <Readout label={tr('马赫数', 'Mach')} code="M" value={inAir ? formatNumber(t.mach, 2) : '—'} tone="plain" testId="readout-mach" />
       <Readout
-        label="迎角"
+        label={tr('迎角', 'AoA')}
         code="AoA"
         value={inAir ? formatAngle(t.angleOfAttack) : '—'}
         unit="°"
         tone={inAir ? loadTone(t.bendingLoad, t.structure.maxBendingLoad, 'plain') : 'plain'}
       />
       <Readout
-        label="升阻比"
+        label={tr('升阻比', 'Lift/drag')}
         code="L/D"
         value={inAir && t.drag > 1 ? formatNumber(t.liftToDrag, 2) : '—'}
         tone="plain"

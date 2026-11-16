@@ -13,9 +13,9 @@ import { buildSnapshot } from '../simulation/snapshot';
 import { canStartInOrbit, createFlightConfig } from '../simulation/startConditions';
 import type { FlightOutcome, FlightStats } from '../simulation/types';
 import { type OrbitTelemetry, type Telemetry, deriveTelemetry } from '../telemetry/telemetry';
-import { EMPTY_PROGRESS, completedCount, isMissionUnlocked, nextMission, progressOf, recordMissionResult } from './career';
+import { EMPTY_PROGRESS, completedCount, isMissionUnlocked, nextMission, progressOf, recordMissionResult, sanitizeProgress } from './career';
 import { comboForHeading, comboLabel, compassLabel, headingOfCombo, launchGuidance, leftOfCombo, reverseCombo } from './guidance';
-import { LOGBOOK_LIMIT, buildLogEntry, isValidLogEntry, upsertLogEntry } from './logbook';
+import { LOGBOOK_LIMIT, buildLogEntry, isValidLogEntry, sanitizeLogbook, upsertLogEntry } from './logbook';
 import { GRADE_THRESHOLDS, gradeFor, isBetterGrade, linearFraction, scoreMission } from './scoring';
 import {
   ORBIT_CONFIRM_TIME,
@@ -432,6 +432,59 @@ describe('任务进度与解锁', () => {
     expect(nextMission(MISSION_CATALOG, progress, 'polar-orbit')).toBeNull();
     // 最后一个任务尚未解锁时不会被建议
     expect(nextMission(MISSION_CATALOG, recordMissionResult({}, 'karman-line', score(100), true), 'suborbital-hop')).toBeNull();
+  });
+});
+
+describe('存档校验', () => {
+  it('任务进度：只保留目录里的任务，无效字段回到默认值', () => {
+    expect(sanitizeProgress(null, MISSION_CATALOG)).toEqual({});
+    expect(sanitizeProgress('broken', MISSION_CATALOG)).toEqual({});
+    const saved = {
+      'karman-line': { completed: true, bestScore: 100, bestGrade: 'S', attempts: 2 },
+      'first-orbit': { completed: 'yes', bestScore: 250, bestGrade: 'Z', attempts: -3.5 },
+      'suborbital-hop': { completed: true, bestScore: Number.NaN, attempts: 1.9 },
+      'removed-mission': { completed: true, bestScore: 80, bestGrade: 'A', attempts: 1 },
+      'crew-return': 'not an object',
+    };
+    expect(sanitizeProgress(saved, MISSION_CATALOG)).toEqual({
+      'karman-line': { completed: true, bestScore: 100, bestGrade: 'S', attempts: 2 },
+      'first-orbit': { completed: false, bestScore: 100, bestGrade: null, attempts: 0 },
+      'suborbital-hop': { completed: true, bestScore: 0, bestGrade: null, attempts: 1 },
+    });
+    // 经过 JSON 往返（存档的实际形态）结果不变
+    const progress = recordMissionResult({}, 'karman-line', { total: 92, grade: 'S', items: [] }, true);
+    expect(sanitizeProgress(JSON.parse(JSON.stringify(progress)), MISSION_CATALOG)).toEqual(progress);
+  });
+
+  it('飞行日志：不是数组则为空；无效条目被丢弃；不超过条数上限', () => {
+    expect(sanitizeLogbook(undefined)).toEqual([]);
+    expect(sanitizeLogbook({ 0: 'x' })).toEqual([]);
+    const entry = (id: string) => ({
+      id,
+      date: '2026-11-15T03:00:00.000Z',
+      missionId: null,
+      vehicleId: 'frontier-1',
+      siteId: 'cape-canaveral',
+      start: 'pad',
+      result: 'landed',
+      cause: null,
+      missionStatus: null,
+      score: null,
+      grade: null,
+      duration: 100,
+      maxAltitude: 1,
+      maxSpeed: 1,
+      maxGLoad: 1,
+      maxDynamicPressure: 1,
+      maxHeatFlux: 1,
+      downrange: 1,
+      orbit: null,
+    });
+    const cleaned = sanitizeLogbook([entry('a'), { id: 'bad' }, null, entry('b'), { ...entry('c'), duration: 'long' }]);
+    expect(cleaned.map((e) => e.id)).toEqual(['a', 'b']);
+    const many = Array.from({ length: LOGBOOK_LIMIT + 20 }, (_, i) => entry(`flight-${i}`));
+    expect(sanitizeLogbook(many)).toHaveLength(LOGBOOK_LIMIT);
+    expect(sanitizeLogbook(many)[0]?.id).toBe('flight-0');
   });
 });
 

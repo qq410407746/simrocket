@@ -1,5 +1,7 @@
 import { julianDateAt } from '@/game/physics/ephemeris/time';
 import type { Telemetry } from '@/game/telemetry/telemetry';
+import { useI18n } from '@/i18n';
+import { createTranslator, type Language } from '@/i18n/locale';
 import { useGameStore } from '@/stores/gameStore';
 import { usePerfStore } from '@/stores/perfStore';
 import { simRuntime } from '@/stores/simRuntime';
@@ -17,35 +19,37 @@ interface PhaseLabel {
 }
 
 /** 由遥测状态得出界面上显示的飞行阶段。 */
-const phaseLabel = (t: Telemetry | null): PhaseLabel => {
+const phaseLabel = (t: Telemetry | null, language: Language): PhaseLabel => {
+  const tr = createTranslator(language);
   if (!t || t.phase === 'prelaunch') {
     return t?.ignited
-      ? { text: '发动机已点火', code: 'IGNITION', tone: 'border-warn/70 text-warn' }
-      : { text: '发射台待命', code: 'PRE-LAUNCH', tone: 'border-data/60 text-data' };
+      ? { text: tr('发动机已点火', 'Engines ignited'), code: 'IGNITION', tone: 'border-warn/70 text-warn' }
+      : { text: tr('发射台待命', 'On pad'), code: 'PRE-LAUNCH', tone: 'border-data/60 text-data' };
   }
-  if (t.phase === 'landed') return { text: '已着陆', code: 'LANDED', tone: 'border-ok/60 text-ok' };
-  if (t.phase === 'destroyed') return { text: '飞行器损毁', code: 'LOSS OF VEHICLE', tone: 'border-danger/70 text-danger' };
-  if (t.thrust > 0) return { text: '动力飞行', code: 'POWERED FLIGHT', tone: 'border-ok/60 text-ok' };
-  if (t.parachute.phase === 'drogue' || t.parachute.phase === 'main') return { text: '伞降', code: 'PARACHUTE DESCENT', tone: 'border-ok/60 text-ok' };
+  if (t.phase === 'landed') return { text: tr('已着陆', 'Landed'), code: 'LANDED', tone: 'border-ok/60 text-ok' };
+  if (t.phase === 'destroyed') return { text: tr('飞行器损毁', 'Vehicle lost'), code: 'LOSS OF VEHICLE', tone: 'border-danger/70 text-danger' };
+  if (t.thrust > 0) return { text: tr('动力飞行', 'Powered flight'), code: 'POWERED FLIGHT', tone: 'border-ok/60 text-ok' };
+  if (t.parachute.phase === 'drogue' || t.parachute.phase === 'main') return { text: tr('伞降', 'Chute descent'), code: 'PARACHUTE DESCENT', tone: 'border-ok/60 text-ok' };
   // 再入：无动力、正在下降，且气动加热已经明显，或仍在以超声速穿过大气层
   if (t.verticalSpeed < 0 && (t.referenceHeatFlux > REENTRY_HEAT_FLUX || (t.altitude < 90_000 && t.mach > 1.2 && t.airDensity > 0))) {
-    return { text: '再入大气层', code: 'REENTRY', tone: 'border-warn/70 text-warn' };
+    return { text: tr('再入大气层', 'Reentry'), code: 'REENTRY', tone: 'border-warn/70 text-warn' };
   }
-  if (t.verticalSpeed < -5 && t.altitude < 40_000) return { text: '下降', code: 'DESCENT', tone: 'border-data/60 text-data' };
-  if (t.orbit?.classification === 'orbit') return { text: '在轨滑行', code: 'ON ORBIT', tone: 'border-ok/60 text-ok' };
-  if (t.orbit?.classification === 'escape') return { text: '逃逸轨道', code: 'ESCAPE', tone: 'border-data/60 text-data' };
-  return { text: '无动力滑行', code: 'COAST', tone: 'border-data/60 text-data' };
+  if (t.verticalSpeed < -5 && t.altitude < 40_000) return { text: tr('下降', 'Descent'), code: 'DESCENT', tone: 'border-data/60 text-data' };
+  if (t.orbit?.classification === 'orbit') return { text: tr('在轨滑行', 'On orbit'), code: 'ON ORBIT', tone: 'border-ok/60 text-ok' };
+  if (t.orbit?.classification === 'escape') return { text: tr('逃逸轨道', 'Escape'), code: 'ESCAPE', tone: 'border-data/60 text-data' };
+  return { text: tr('无动力滑行', 'Coast'), code: 'COAST', tone: 'border-data/60 text-data' };
 };
 
 /** 顶部状态栏：任务阶段、任务时钟、UTC、实测性能。 */
 export function TopBar() {
+  const { language, t } = useI18n();
   const telemetry = useSimStore((s) => s.telemetry);
   const epoch = useSimStore((s) => s.epochJulianDate);
   const execution = useSimStore((s) => s.execution);
   const fps = usePerfStore((s) => s.fps);
   const returnToMenu = useGameStore((s) => s.returnToMenu);
 
-  const phase = phaseLabel(telemetry);
+  const phase = phaseLabel(telemetry, language);
   const simTime = telemetry?.simTime ?? 0;
   const missionTime = telemetry?.missionTime ?? null;
 
@@ -54,22 +58,22 @@ export function TopBar() {
       <div className="flex items-center gap-4">
         <div className="flex items-baseline gap-2">
           <span className="text-[13px] font-bold tracking-[0.22em] text-ink">ORBITAL FRONTIER</span>
-          <span className="hidden text-[11px] tracking-widest text-data-dim xl:inline">轨道边疆</span>
+          <span className="hidden text-[11px] tracking-widest text-data-dim xl:inline">{t('轨道边疆', 'FLIGHT')}</span>
         </div>
         <span className={`rounded border px-2 py-0.5 text-[11px] whitespace-nowrap ${phase.tone}`} data-testid="flight-phase">
           {phase.text}
-          <span className="ml-2 hidden text-[9px] tracking-[0.18em] opacity-70 lg:inline">{phase.code}</span>
+          {language === 'zh' && <span className="ml-2 hidden text-[9px] tracking-[0.18em] opacity-70 lg:inline">{phase.code}</span>}
         </span>
       </div>
 
       <div className="flex items-center gap-6">
-        <div className="flex items-baseline gap-2" title="任务时间：自起飞瞬间开始计时">
+        <div className="flex items-baseline gap-2" title={t('任务时间：自起飞瞬间开始计时', 'Mission elapsed time: measured from liftoff')}>
           <span className="text-[10px] tracking-[0.18em] text-ink-faint">MET</span>
           <span className="readout text-[20px] font-semibold text-ink" data-testid="mission-clock">
             {formatMissionTime(missionTime)}
           </span>
           {missionTime === null && (
-            <span className="rounded-sm bg-warn/15 px-1.5 py-0.5 text-[10px] font-semibold whitespace-nowrap text-warn">HOLD · 待命</span>
+            <span className="rounded-sm bg-warn/15 px-1.5 py-0.5 text-[10px] font-semibold whitespace-nowrap text-warn">{t('HOLD · 待命', 'HOLD')}</span>
           )}
         </div>
         <div className="hidden flex-col items-end leading-tight lg:flex">
@@ -77,22 +81,22 @@ export function TopBar() {
             {epoch === null ? '—' : formatUtc(julianDateAt(epoch, simTime))}
           </span>
           <span className="readout text-[10px] text-ink-faint" data-testid="sim-elapsed">
-            模拟历时 {formatDuration(simTime)}
+            {t('模拟历时', 'Sim elapsed')} {formatDuration(simTime)}
           </span>
         </div>
       </div>
 
       <div className="flex items-center gap-3">
-        <div className="hidden flex-col items-end leading-tight md:flex" title="实测帧率；物理计算位置">
+        <div className="hidden flex-col items-end leading-tight md:flex" title={t('实测帧率；物理计算位置', 'Measured frame rate; physics execution location')}>
           <span className="readout text-[12px] text-ink-dim" data-testid="fps">
             {fps > 0 ? `${fps.toFixed(0)} FPS` : '— FPS'}
           </span>
           <span className="text-[10px] text-ink-faint">
-            物理：{execution === 'worker' ? 'Web Worker' : execution === 'main-thread' ? '主线程（降级）' : '—'}
+            {t('物理：', 'Physics: ')}{execution === 'worker' ? 'Web Worker' : execution === 'main-thread' ? t('主线程（降级）', 'Main thread (fallback)') : '—'}
           </span>
         </div>
-        <HudButton onClick={() => simRuntime.restart()} title="回到发射台，重新开始本次飞行" testId="restart-button">
-          重新发射
+        <HudButton onClick={() => simRuntime.restart()} title={t('回到发射台，重新开始本次飞行', 'Return to the launch pad and restart this flight')} testId="restart-button">
+          {t('重新发射', 'Relaunch')}
         </HudButton>
         <HudButton
           onClick={() => {
@@ -102,7 +106,7 @@ export function TopBar() {
           }}
           testId="menu-button"
         >
-          主菜单
+          {t('主菜单', 'Menu')}
         </HudButton>
       </div>
     </header>

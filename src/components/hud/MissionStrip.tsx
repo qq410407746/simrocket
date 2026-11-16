@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import { findMission } from '@/data/missions';
+import { useI18n } from '@/i18n';
+import { localizeMission } from '@/i18n/catalog';
 import { useSimStore } from '@/stores/simStore';
 import { OBJECTIVE_MARK, objectiveProgress } from './missionLabels';
 
@@ -8,13 +10,15 @@ import { OBJECTIVE_MARK, objectiveProgress } from './missionLabels';
  * 自由飞行时不显示。
  */
 export function MissionStrip() {
+  const { language, t } = useI18n();
   const missionId = useSimStore((s) => s.missionId);
   const state = useSimStore((s) => s.mission);
   const telemetry = useSimStore((s) => s.telemetry);
   const stats = useSimStore((s) => s.stats);
   const [open, setOpen] = useState(false);
-  const mission = findMission(missionId);
-  if (!mission || !state) return null;
+  const definition = findMission(missionId);
+  if (!definition || !state) return null;
+  const mission = localizeMission(definition, language);
 
   const statusTone = state.status === 'success' ? 'text-ok' : state.status === 'failed' ? 'text-danger' : 'text-ink';
   return (
@@ -31,24 +35,24 @@ export function MissionStrip() {
             setOpen((value) => !value);
           }}
           aria-expanded={open}
-          title="显示 / 隐藏这次任务的飞行步骤"
+          title={t('显示 / 隐藏这次任务的飞行步骤', 'Show / hide the flight plan for this mission')}
           data-testid="mission-title"
           className={`rounded border border-line px-1.5 text-[11px] leading-5 font-semibold tracking-wider whitespace-nowrap transition-colors hover:border-data-dim ${statusTone}`}
         >
-          任务 · {mission.title}
-          {state.status === 'success' ? ' · 已完成' : state.status === 'failed' ? ' · 失败' : ''}
+          {t('任务', 'Mission')} · {mission.title}
+          {state.status === 'success' ? t(' · 已完成', ' · Completed') : state.status === 'failed' ? t(' · 失败', ' · Failed') : ''}
           <span className="ml-1 text-ink-faint">{open ? '▴' : '▾'}</span>
         </button>
         {mission.objectives.map((objective, i) => {
           const status = state.objectives[i]?.status ?? 'pending';
           const mark = OBJECTIVE_MARK[status];
-          const progress = objectiveProgress(objective.spec, status, telemetry, stats, state);
+          const progress = objectiveProgress(objective.spec, status, telemetry, stats, state, language);
           return (
             <span key={objective.id} className="flex items-baseline gap-1 whitespace-nowrap" data-testid={`objective-${objective.id}`} data-status={status}>
               <span className={`font-semibold ${mark.tone}`}>{mark.mark}</span>
               <span className={status === 'pending' ? 'text-ink' : mark.tone}>
                 {objective.title}
-                {objective.optional ? <span className="text-ink-faint">（附加）</span> : null}
+                {objective.optional ? <span className="text-ink-faint">{t('（附加）', ' (optional)')}</span> : null}
               </span>
               {progress && <span className="readout text-[11px] text-data">{progress}</span>}
             </span>

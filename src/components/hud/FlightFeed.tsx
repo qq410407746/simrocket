@@ -4,41 +4,45 @@ import { getVehicleOrDefault } from '@/data/vehicles';
 import { DEG2RAD } from '@/game/physics/constants';
 import type { FlightEvent } from '@/game/simulation/types';
 import type { VehicleDefinition } from '@/game/vehicles/types';
+import { useI18n } from '@/i18n';
+import { dataText } from '@/i18n/dataText';
+import { type Language, createTranslator } from '@/i18n/locale';
 import { useGameStore } from '@/stores/gameStore';
 import { useSimStore } from '@/stores/simStore';
 import { formatDuration } from '@/utils/format';
 import { missionFlightHint } from './missionHints';
 import { MissionStrip } from './MissionStrip';
 
-const stageName = (vehicle: VehicleDefinition, index: number): string => vehicle.stages[index]?.name ?? '';
+const stageName = (vehicle: VehicleDefinition, index: number, language: Language = 'zh'): string => dataText(vehicle.stages[index]?.name ?? '', language);
 
 /** 事件 → 界面文字。 */
-export const describeEvent = (event: FlightEvent, vehicle: VehicleDefinition): string => {
+export const describeEvent = (event: FlightEvent, vehicle: VehicleDefinition, language: Language = 'zh'): string => {
+  const t = createTranslator(language);
   switch (event.kind) {
     case 'ignition':
-      return `${stageName(vehicle, event.stageIndex)}发动机点火`;
+      return t(`${stageName(vehicle, event.stageIndex, language)}发动机点火`, `${stageName(vehicle, event.stageIndex, language)} engine ignition`);
     case 'liftoff':
-      return '起飞';
+      return t('起飞', 'Liftoff');
     case 'depleted':
-      return event.stageIndex < vehicle.stages.length ? `${stageName(vehicle, event.stageIndex)}推进剂耗尽` : '飞船推进剂耗尽';
+      return event.stageIndex < vehicle.stages.length ? t(`${stageName(vehicle, event.stageIndex, language)}推进剂耗尽`, `${stageName(vehicle, event.stageIndex, language)} propellant depleted`) : t('飞船推进剂耗尽', 'Spacecraft propellant depleted');
     case 'separation':
-      return `${stageName(vehicle, event.stageIndex)}分离`;
+      return t(`${stageName(vehicle, event.stageIndex, language)}分离`, `${stageName(vehicle, event.stageIndex, language)} separated`);
     case 'fairing':
-      return '整流罩分离';
+      return t('整流罩分离', 'Fairing separated');
     case 'heat-shield':
-      return '防热大底分离';
+      return t('防热大底分离', 'Heat shield separated');
     case 'payload-ignition':
-      return '飞船发动机点火';
+      return t('飞船发动机点火', 'Spacecraft engine ignition');
     case 'drogue-deployed':
-      return '减速伞张开';
+      return t('减速伞张开', 'Drogue parachute deployed');
     case 'main-deployed':
-      return '主伞张开';
+      return t('主伞张开', 'Main parachute deployed');
     case 'parachute-failed':
-      return '降落伞被撕毁';
+      return t('降落伞被撕毁', 'Parachute torn apart');
     case 'landed':
-      return '着陆';
+      return t('着陆', 'Landing');
     case 'destroyed':
-      return '飞行器损毁';
+      return t('飞行器损毁', 'Vehicle destroyed');
   }
 };
 
@@ -54,6 +58,7 @@ const TONE: Partial<Record<FlightEvent['kind'], string>> = {
 
 /** 屏幕上方居中的任务条、操作提示与最近的飞行事件。 */
 export function FlightFeed() {
+  const { language } = useI18n();
   const vehicle = getVehicleOrDefault(useGameStore((s) => s.vehicleId));
   const site = getLaunchSiteOrDefault(useGameStore((s) => s.siteId));
   const telemetry = useSimStore((s) => s.telemetry);
@@ -62,7 +67,7 @@ export function FlightFeed() {
   const mission = findMission(useSimStore((s) => s.missionId)) ?? null;
   const missionState = useSimStore((s) => s.mission);
   const mapMode = useGameStore((s) => s.cameraMode === 'map');
-  const hint = missionFlightHint(telemetry, vehicle, mission, missionState, site.latitudeDeg * DEG2RAD);
+  const hint = missionFlightHint(telemetry, vehicle, mission, missionState, site.latitudeDeg * DEG2RAD, language);
   const recent = events.slice(-4);
 
   return (
@@ -88,7 +93,7 @@ export function FlightFeed() {
                 style={{ opacity: 0.45 + (0.55 * (i + 1)) / recent.length }}
               >
                 <span className="text-ink-faint">{met === null || met < 0 ? 'T−' : `T+${formatDuration(met)}`}</span>{' '}
-                <span className={TONE[event.kind] ?? 'text-ink'}>{describeEvent(event, vehicle)}</span>
+                <span className={TONE[event.kind] ?? 'text-ink'}>{describeEvent(event, vehicle, language)}</span>
               </li>
             );
           })}

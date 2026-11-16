@@ -5,6 +5,7 @@ import { LoadingOverlay, SimErrorBanner, WebGLUnsupported } from '@/components/u
 import { getLaunchSiteOrDefault } from '@/data/launchSites';
 import { findMission } from '@/data/missions';
 import { getVehicleOrDefault } from '@/data/vehicles';
+import { useI18n } from '@/i18n';
 import { SceneRoot } from '@/rendering/SceneRoot';
 import { useGameStore } from '@/stores/gameStore';
 import { createSimulationConfig, simRuntime } from '@/stores/simRuntime';
@@ -40,6 +41,7 @@ class SceneErrorBoundary extends Component<{ children: ReactNode }, { failed: bo
  *   上层  DOM 界面（主菜单 / 飞行 HUD），默认不拦截指针事件，只有面板本身可交互
  */
 export function App() {
+  const { language, t } = useI18n();
   const screen = useGameStore((s) => s.screen);
   const vehicleId = useGameStore((s) => s.vehicleId);
   const siteId = useGameStore((s) => s.siteId);
@@ -47,6 +49,15 @@ export function App() {
   const missionId = useGameStore((s) => s.missionId);
   const launchSerial = useGameStore((s) => s.launchSerial);
   const webgl = useMemo(detectWebGL2, []);
+
+  useEffect(() => {
+    document.documentElement.lang = language === 'zh' ? 'zh-CN' : 'en';
+    document.title = t('Orbital Frontier · 轨道边疆', 'Orbital Frontier');
+    document.querySelector('meta[name="description"]')?.setAttribute(
+      'content',
+      t('Orbital Frontier（轨道边疆）— 基于真实物理的网页版火箭发射与轨道飞行模拟', 'Orbital Frontier — a browser-based spaceflight simulator with orbital mechanics, aerodynamics and reentry physics.'),
+    );
+  }, [language, t]);
 
   // 玩家选择的火箭、发射场或出发点变化、或开始一个任务时，以新配置重新开始模拟。
   // launchSerial 只用来触发重新开始：同一个任务再飞一次时其余依赖都没有变。
