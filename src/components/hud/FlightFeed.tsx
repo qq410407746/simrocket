@@ -1,6 +1,6 @@
 import { getLaunchSiteOrDefault } from '@/data/launchSites';
 import { findMission } from '@/data/missions';
-import { getVehicleOrDefault } from '@/data/vehicles';
+import { useVehicleDefinition } from '@/stores/designStore';
 import { DEG2RAD } from '@/game/physics/constants';
 import type { FlightEvent } from '@/game/simulation/types';
 import type { VehicleDefinition } from '@/game/vehicles/types';
@@ -59,7 +59,7 @@ const TONE: Partial<Record<FlightEvent['kind'], string>> = {
 /** 屏幕上方居中的任务条、操作提示与最近的飞行事件。 */
 export function FlightFeed() {
   const { language } = useI18n();
-  const vehicle = getVehicleOrDefault(useGameStore((s) => s.vehicleId));
+  const vehicle = useVehicleDefinition(useGameStore((s) => s.vehicleId));
   const site = getLaunchSiteOrDefault(useGameStore((s) => s.siteId));
   const telemetry = useSimStore((s) => s.telemetry);
   const events = useSimStore((s) => s.events);

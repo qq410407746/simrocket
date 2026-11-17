@@ -195,7 +195,9 @@ describe('flight log presentation', () => {
     ];
     useCareerStore.setState({ logbook: entries });
     const html = render(LogbookMenu);
-    expect(html).not.toMatch(/\p{Script=Han}/u);
+    // 阶段七新增回看入口按当前要求使用中文；旧日志元数据继续检查英文。
+    expect(html).toContain('查看遥测曲线');
+    expect(html.replaceAll('查看遥测曲线', '')).not.toMatch(/\p{Script=Han}/u);
     expect(html).toContain('First Orbit');
     expect(html).toContain('Crew Return');
     expect(html).toContain('Free flight');

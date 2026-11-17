@@ -32,6 +32,7 @@ import { deriveTelemetry } from '@/game/telemetry/telemetry';
 import { ThermalHistory, sampleThermal } from '@/game/telemetry/thermalHistory';
 import type { VehicleDefinition } from '@/game/vehicles/types';
 import { SimulationClient } from '@/workers/SimulationClient';
+import { persistFlightArchive } from './archiveStore';
 import { useCareerStore } from './careerStore';
 import type { StartMode } from './gameStore';
 import { EVENT_LOG_LIMIT, INITIAL_SIM_STATE, useSimStore } from './simStore';
@@ -87,7 +88,10 @@ class SimRuntime {
   start(config: SimulationConfig, context: FlightContext = NO_CONTEXT): void {
     // 离开上一次飞行之前，把它记进飞行日志
     this.logFlight();
-    if (!this.client) this.client = new SimulationClient(this.handleEvent);
+    // 每次新飞行使用独立客户端。旧Worker已排队的快照不能被归到新flightId，
+    // 否则会生成重复的飞行日志，并把只含终点的曲线当成一趟新飞行。
+    this.client?.dispose();
+    this.client = new SimulationClient(this.handleEvent);
     this.config = config;
     this.context = context;
     this.flightCounter += 1;
@@ -236,6 +240,7 @@ class SimRuntime {
         date: new Date().toISOString(),
         missionId: this.context.mission?.id ?? null,
         vehicleId: config.vehicle.id,
+        vehicleName: config.vehicle.nameZh,
         siteId: this.context.siteId,
         start: this.context.start,
         telemetry,
@@ -245,6 +250,11 @@ class SimRuntime {
         score: store.missionScore,
       }),
     );
+    void persistFlightArchive({
+      version: 1, id: this.flightId, vehicleName: config.vehicle.nameZh, savedAt: new Date().toISOString(),
+      samples: [...this.flightRecorder.samples],
+      events: this.flightRecorder.events.map((event) => ({ ...event, time: Math.max(0, event.time - store.liftoffTime!) })),
+    }, useCareerStore.getState().logbook.map((entry) => entry.id));
   }
 
   private cancelTrailingTelemetry(): void {

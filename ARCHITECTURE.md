@@ -1,8 +1,8 @@
 # 系统架构
 
-> 阶段七进行中（2026-11-17）：用户已确认优先火箭设计与存档；基线785项单元测试及构建通过。见[阶段七实施计划](docs/阶段七实施计划.md)。阶段六验收证据见[阶段六报告](docs/阶段六报告.md)。
+> 阶段七进行中（2026-11-17）：火箭设计与存档第一组已验收，824项单元测试及11项相关浏览器测试通过。见[第一组报告](docs/阶段七第一组报告.md)与[实施计划](docs/阶段七实施计划.md)。
 
-本文档描述 Orbital Frontier 当前（阶段五完成时）的实际架构，以及它为后续阶段预留的扩展方式。
+本文档描述 Orbital Frontier 当前的实际架构，以及它为后续阶段预留的扩展方式。
 
 ## 1. 设计原则
 
@@ -41,7 +41,7 @@
 │   轨道根数与开普勒传播、发射方位角、配平迎角、气动加热与热防护、质量特性） │
 ├──────────────────────────────────────────────────────────────────────┤
 │ 内容数据          src/data （火箭目录、发射场、表面材料、任务目录）        │
-│ 数据存储          LocalStorage（Zustand persist；IndexedDB 尚未使用）    │
+│ 数据存储          LocalStorage（设置/进度/图纸）+ IndexedDB（遥测）    │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -348,8 +348,8 @@ step()
 | 后续需求 | 接入位置 |
 | --- | --- |
 | 自动驾驶（自动上升、自动执行机动） | 新增 `game/autopilot`，产生与键盘相同的指令；测试用的 `AscentPilot` 与 `HandFlownPilot` 已验证这条路径。自动指向（阶段三已实现）是它的姿态通道 |
-| 机动节点 | 在 `physics/orbital` 上增加"在某时刻施加 Δv 后的轨道"计算（`propagateKepler` + `elementsFromState` 已具备）；地图增加节点标记，自动指向增加"机动方向"模式 |
-| 地面轨迹 | 对预测折线或解析轨道逐点换算经纬度（需计入各点时刻的地球自转角；`prediction.times` 已提供时刻） |
+| 机动节点（已实现） | `physics/orbital/advanced.ts`提供脉冲预览；地图显示节点，Simulation支持机动方向指向 |
+| 地面轨迹（已实现） | 解析采样扣除地球自转，球面与经纬网格展示；暂无陆地底图 |
 | 气动力矩、力矩驱动的姿态 | 扩展 `physics/aerodynamics`（已有机体轴上的轴向力与法向力，补上压心位置即可得到力矩）与 `physics/attitude` |
 | 再入制导 | 配平再入的倾侧角已经是一条指令通道（`setBankAngle`）；制导律只需按落点偏差与过载给出倾侧角 |
 | 滚转程序 | 在 `Simulation.bodyRateCommand` 里增加一个起飞后的滚转目标；`game/missions/guidance.ts` 的按键换算随之简化 |
@@ -357,7 +357,7 @@ step()
 | 解体画面与残骸 | `failInFlight` 目前直接结束飞行；可把各部件转成分离体继续模拟 |
 | 高倍率在轨传播 | `Simulation.coastSteps` 在安全真空区间合并整数物理步；由主机调度，已接入状态推进 |
 | 新的任务类型（卫星部署、GTO / GEO） | `game/missions` 已实现（2.1 节）。新增目标类型：在 `ObjectiveSpec` 加一个分支并在 `tracker.evaluateObjective` 里判定；新增评分指标：在 `MetricId` 与 `missionMetrics` 里加一项 |
-| 飞行存档与回放 | `SimSnapshot` 与 `SimulationConfig` 已是可序列化的纯数据；`FlightRecorder` 的采样点可以直接存进 IndexedDB |
+| 飞行存档与回放（部分实现） | FlightRecorder采样已存IndexedDB并可回看。SimSnapshot不是完整的内部积分状态，中途续飞需要独立的状态导出/恢复协议 |
 
 ## 8. 已知的架构限制
 
@@ -377,7 +377,7 @@ step()
 - 热防护面板的曲线只保留最近约 600 个采样点，不随存档保存。
 - 任务判定在主线程、按界面的刷新率进行：页面在后台（浏览器暂停定时器）时判定也随之暂停，回到前台后用最新的快照补上。
   判定只依赖持续性的状态与累计量，所以不会漏判；但"任务完成"的时刻可能比实际晚。
-- 任务进度与飞行日志存在 LocalStorage（同步、容量小）：日志只保留 50 条摘要，飞行曲线不持久化。
+- 任务进度与飞行日志存在 LocalStorage（同步、容量小）：日志保留50条摘要；同批飞行曲线独立保存到IndexedDB，不代表可恢复的物理存档。
 - 姿态键是机体轴指令且没有滚转程序：斜向发射时"压低头部"是两个键的组合（`game/missions/guidance.ts`）。
 
 ## 阶段六的数据流与边界
@@ -393,3 +393,13 @@ step()
 - 目标轨道是满足目标的一条参考曲线，不是完整允许区间。未约束RAAN等角度沿用当前轨道；玩家不需要与任意指定的RAAN对齐。
 
 建立或修改节点时，地图自动调整取景以容纳当前轨道和机动预览，之后仍可手动拖动与缩放。
+
+## 阶段七：图纸与遥测档案
+
+- `data/designParts.ts`提供目录模块；`game/vehicles/design.ts`纯函数校验图纸并编译完整VehicleDefinition。图纸仅保存标识，物理数值不从用户JSON注入；structuredClone保留返回舱结构限值中的Infinity，不用JSON复制物理定义。
+- `stores/designStore.ts`保存20份图纸并严格解析备份；`useVehicleDefinition`统一供App、SceneRoot与HUD使用。任务入口仍查内置目录。修改未保存图纸不会改变模拟。
+- `game/storage/flightArchive.ts`定义/校验采样档案和线性估读；不依赖浏览器、React或引擎。
+- `storage/flightArchiveDb.ts`使用IndexedDB数据库`orbital-frontier/flights`的`telemetry`对象仓库；写入、清理、读取串行，保存时按50条日志的ID裁剪。事务完成后才报告成功；打开超时、配额和损坏内容明确报错。
+- `simRuntime.logFlight`在现有日志写入点保存曲线副本；`ArchiveViewer`只读档案，在独立时间轴上回看，不向Worker写回状态。日志保存自定义火箭当时的名称，删图纸不会抹掉历史名称。
+
+每次新飞行都会释放旧SimulationClient并创建独立客户端，旧Worker排队消息由disposed守卫丢弃；防止旧快照、错误或结束事件进入新的flightId。切换型号和重新发射会重新初始化Worker，飞行中的正常物理步不受此变更影响。

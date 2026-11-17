@@ -1,7 +1,7 @@
 import { Canvas } from '@react-three/fiber';
 import { Suspense } from 'react';
 import { getLaunchSiteOrDefault } from '@/data/launchSites';
-import { getVehicleOrDefault } from '@/data/vehicles';
+import { useVehicleDefinition } from '@/stores/designStore';
 import { vehicleHeight } from '@/game/vehicles/analysis';
 import { type GraphicsQuality, useGameStore } from '@/stores/gameStore';
 import { CameraRig } from './cameras/CameraRig';
@@ -28,7 +28,7 @@ const MAX_DPR: Record<GraphicsQuality, number> = { low: 1, medium: 1.5, high: 2 
  */
 export function SceneRoot() {
   const quality = useGameStore((s) => s.quality);
-  const vehicle = getVehicleOrDefault(useGameStore((s) => s.vehicleId));
+  const vehicle = useVehicleDefinition(useGameStore((s) => s.vehicleId));
   const site = getLaunchSiteOrDefault(useGameStore((s) => s.siteId));
   const shadows = quality !== 'low';
 

@@ -1,4 +1,4 @@
-import { getVehicleOrDefault } from '@/data/vehicles';
+import { useVehicleDefinition } from '@/stores/designStore';
 import { TIME_WARP_LEVELS } from '@/game/simulation/types';
 import type { Telemetry } from '@/game/telemetry/telemetry';
 import type { VehicleDefinition } from '@/game/vehicles/types';
@@ -111,7 +111,7 @@ const stageAction = (t: Telemetry | null, vehicle: VehicleDefinition, language: 
 /** 飞行控制：点火/分级、节流阀、抛整流罩、开伞、抛防热大底。姿态由键盘控制（见导航球下方的键位说明）。 */
 function FlightControls() {
   const { language, t: tr } = useI18n();
-  const vehicle = getVehicleOrDefault(useGameStore((s) => s.vehicleId));
+  const vehicle = useVehicleDefinition(useGameStore((s) => s.vehicleId));
   const t = useSimStore((s) => s.telemetry);
   const action = stageAction(t, vehicle, language);
   const active = t?.phase === 'prelaunch' || t?.phase === 'flight';

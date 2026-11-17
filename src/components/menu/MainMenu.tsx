@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { LAUNCH_SITES, getLaunchSiteOrDefault } from '@/data/launchSites';
-import { VEHICLE_CATALOG, getVehicleOrDefault } from '@/data/vehicles';
+import { VEHICLE_CATALOG } from '@/data/vehicles';
 import { ORBIT_START_ALTITUDE, canStartInOrbit } from '@/game/simulation/startConditions';
 import { analyzeVehicle } from '@/game/vehicles/analysis';
 import type { VehicleDefinition } from '@/game/vehicles/types';
@@ -10,6 +10,8 @@ import { useCareerStore } from '@/stores/careerStore';
 import { type GraphicsQuality, type MenuTab, type StartMode, useGameStore } from '@/stores/gameStore';
 import { simRuntime } from '@/stores/simRuntime';
 import { formatMass, formatNumber } from '@/utils/format';
+import { useDesignStore, resolveVehicle, useVehicleDefinition } from '@/stores/designStore';
+import { DesignWorkshop } from './DesignWorkshop';
 import { LogbookMenu } from './LogbookMenu';
 import { MissionBriefing, MissionList } from './MissionMenu';
 
@@ -18,6 +20,7 @@ const QUALITY_LABEL: Record<GraphicsQuality, readonly [string, string]> = { low:
 const TABS: readonly { readonly tab: MenuTab; readonly label: readonly [string, string]; readonly hint: readonly [string, string] }[] = [
   { tab: 'missions', label: ['任务', 'Missions'], hint: ['按顺序完成任务：每个任务规定火箭、发射场与目标，飞完给出评分', 'Complete missions in sequence, each with a vehicle, launch site, objectives and score.'] },
   { tab: 'sandbox', label: ['自由飞行', 'Free flight'], hint: ['自己选择火箭、发射场与出发点，没有目标与评分', 'Choose your vehicle, launch site and starting point. No objectives or scoring.'] },
+  { tab: 'design', label: ['火箭设计', '火箭设计'], hint: ['组装、保存与试飞自定义火箭', '组装、保存与试飞自定义火箭'] },
   { tab: 'logbook', label: ['飞行记录', 'Logbook'], hint: ['最近的飞行与成绩', 'Recent flights and results'] },
 ];
 
@@ -77,7 +80,8 @@ function SandboxSetup() {
   const startMode = useGameStore((s) => s.startMode);
   const setStartMode = useGameStore((s) => s.setStartMode);
 
-  const vehicle = getVehicleOrDefault(vehicleId);
+  const vehicle = useVehicleDefinition(vehicleId);
+  const designs = useDesignStore((state) => state.designs);
   const site = getLaunchSiteOrDefault(siteId);
   const orbitAvailable = canStartInOrbit(vehicle);
   const effectiveStart: StartMode = startMode === 'orbit' && orbitAvailable ? 'orbit' : 'pad';
@@ -87,7 +91,7 @@ function SandboxSetup() {
       <section>
         <h2 className="mb-2 text-[11px] font-semibold tracking-[0.18em] text-ink-faint">{t('选择火箭', 'Select vehicle')}</h2>
         <div className="flex flex-col gap-2">
-          {VEHICLE_CATALOG.map((v) => (
+          {[...VEHICLE_CATALOG, ...designs.map((d) => resolveVehicle(d.id, designs))].map((v) => (
             <VehicleCard key={v.id} vehicle={v} selected={v.id === vehicleId} onSelect={() => selectVehicle(v.id)} />
           ))}
         </div>
@@ -211,7 +215,7 @@ export function MainMenu() {
           <p className="mt-1.5 text-[11px] leading-relaxed text-ink-dim">{t('以真实的轨道动力学与空气动力学为基础：发射、入轨、轨道机动、再入。', 'Launch, reach orbit, maneuver and reenter — powered by orbital mechanics and aerodynamics.')}</p>
         </header>
 
-        <nav className="grid grid-cols-3 gap-1" role="tablist" aria-label={t('主菜单', 'Main menu')}>
+        <nav className="grid grid-cols-2 gap-1" role="tablist" aria-label={t('主菜单', 'Main menu')}>
           {TABS.map((entry) => {
             const selected = tab === entry.tab;
             return (
@@ -236,8 +240,9 @@ export function MainMenu() {
         {tab === 'missions' && <MissionList />}
         {tab === 'sandbox' && <SandboxSetup />}
         {tab === 'logbook' && <LogbookMenu />}
+        {tab === 'design' && <DesignWorkshop />}
 
-        <footer className="mt-auto flex flex-col gap-2 border-t border-line/60 pt-3">
+        <footer data-testid="menu-settings" className="mt-auto flex shrink-0 flex-col gap-2 border-t border-line/60 pt-3">
           <div className="flex items-center justify-between">
             <span className="text-[11px] text-ink-faint">{t('画质', 'Graphics')}</span>
             <div className="flex gap-1">
@@ -268,7 +273,7 @@ export function MainMenu() {
             />
           </label>
           <p className="text-[10px] leading-relaxed text-ink-faint">
-            {t('开发阶段 5 / 7 · 七个任务：亚轨道、入轨、指定倾角、极地轨道、载人返回；带评分、教学提示与飞行记录。高级轨道任务（GTO / GEO）属于阶段六。', 'Development phase 5 / 7 · Seven missions covering suborbital flight, orbit, inclination, polar orbit and crew return, with scoring, guidance and flight records. Advanced orbital missions (GTO / GEO) are planned for phase 6.')}
+            {t('开发阶段 7 / 7 · 八个任务，含同步通信卫星部署。火箭设计与存档完善中。', 'Development phase 7 / 7 · Eight missions including GEO satellite deployment. Rocket design and saved-flight features are in development.')}
           </p>
         </footer>
       </div>
