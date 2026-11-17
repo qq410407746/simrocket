@@ -1,3 +1,5 @@
+import { SYNCHRONOUS_RADIUS } from '@/game/physics/orbital/advanced';
+import { EARTH } from '@/game/physics/constants';
 /**
  * 任务目录。
  *
@@ -378,6 +380,27 @@ const POLAR_ORBIT: MissionDefinition = {
   requires: ['inclined-orbit'],
 };
 
+const GEO_DEPLOYMENT: MissionDefinition = {
+  id: 'geo-deployment', title: '轨道边疆：同步通信卫星', category: 'advanced',
+  summary: '天顶三号：停泊轨道 → GTO → 远地点圆化与倾角修正 → 卫星部署。',
+  briefing: ['从库鲁向东发射，将通信卫星送入地球静止轨道。', '使用地图里的机动规划器。节点是瞬时点火预览，真实发动机需要燃烧时间；分配燃烧中心在节点附近，关机后按轨道读数修正。', 'GEO 需要周期接近恒星日、低偏心率、低倾角以及未来一个恒星日星下点经度基本不动。只有周期符合要求的 GSO 还不够。', '当前火箭参数与旧任务评分保持不变。卫星没有发动机，部署前务必完成轨道修正。'],
+  vehicleId: 'zenith-3', siteId: 'kourou', start: 'pad',
+  objectives: [
+    { id:'parking', title:'建立停泊轨道', spec:{kind:'orbit',minPeriapsis:150000,maxApoapsis:600000} },
+    { id:'gto', title:'完成同步转移轨道注入', spec:{kind:'orbit',minPeriapsis:100000,maxPeriapsis:1000000,minApoapsis:SYNCHRONOUS_RADIUS-EARTH.RADIUS-1000000,maxApoapsis:SYNCHRONOUS_RADIUS-EARTH.RADIUS+1000000} },
+    { id:'geo', title:'圆化并修正为地球静止轨道', spec:{kind:'synchronous',stationary:true} },
+    { id:'deploy', title:'部署通信卫星', spec:{kind:'deploy-satellite'} },
+    { id:'confirm', title:'确认部署后的 GEO', spec:{kind:'synchronous',stationary:true,deployed:true} },
+  ],
+  scoring: [
+    {id:'objectives',label:'完整轨道任务',weight:70,rule:{kind:'objectives'},note:'完成全部五个步骤。'},
+    {id:'period',label:'周期精度',weight:15,rule:{kind:'metric',metric:'period-error',full:10,zero:120},note:'与恒星日相差10秒以内满分。'},
+    {id:'longitude',label:'星下点稳定性',weight:15,rule:{kind:'metric',metric:'longitude-span',full:0.1*DEG2RAD,zero:1*DEG2RAD},note:'未来一个恒星日经度摆幅0.1°以内满分。'},
+  ],
+  flightPlan: ['向东发射，约60 m/s时倾斜1°，用顺行保持完成重力转弯；逐级分离并抛罩。', '上面级用俯仰控制垂直速度，近地点达到150 km后关机，等待停泊轨道确认。', '打开地图，生成 GTO 注入节点。指向机动方向，在节点前半个预计燃烧时间点火；余量接近0时核对远地点，偏低则用顺行补推至约35793 km后关机。', '清除旧节点，生成赤道圆化节点。在远地点附近的赤道交点将速度改为赤道圆轨道速度。', '关机后核对同步诊断；按需要用圆化、同步高度与倾角修正节点精修。', 'GEO 目标完成后部署卫星，等待部署后 GEO 确认。'],
+  requires: ['first-orbit'],
+};
+
 export const MISSION_CATALOG: readonly MissionDefinition[] = [
   KARMAN_LINE,
   SUBORBITAL_HOP,
@@ -386,6 +409,7 @@ export const MISSION_CATALOG: readonly MissionDefinition[] = [
   ORBITAL_FLIGHT,
   INCLINED_ORBIT,
   POLAR_ORBIT,
+  GEO_DEPLOYMENT,
 ];
 
 export const findMission = (id: string | null | undefined): MissionDefinition | undefined =>

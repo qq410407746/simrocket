@@ -1,3 +1,4 @@
+import { ManeuverPanel } from './ManeuverPanel';
 import { useI18n } from '@/i18n';
 import { useGameStore } from '@/stores/gameStore';
 import { useSimStore } from '@/stores/simStore';
@@ -18,7 +19,7 @@ export function MapOverlay() {
   const impactSpeed = formatSpeed(impact?.speed ?? 0);
 
   return (
-    <div className="panel-frame pointer-events-auto w-60 rounded-lg px-3 py-2 text-[11px] backdrop-blur-md" data-testid="map-overlay">
+    <div className="panel-frame pointer-events-auto w-60 max-h-[48vh] overflow-y-auto rounded-lg px-3 py-2 text-[11px] backdrop-blur-md" data-testid="map-overlay">
       <div className="mb-1.5 flex items-center justify-between">
         <span className="text-[12px] font-semibold tracking-wider text-ink">{t('轨道地图', 'Orbit map')}</span>
         <span className="text-[9px] tracking-[0.2em] text-data-dim">ORBIT MAP</span>
@@ -95,6 +96,7 @@ export function MapOverlay() {
               </dl>
             </div>
           )}
+          <ManeuverPanel />
           <p className="mt-1.5 text-[10px] leading-relaxed text-ink-faint">
             {t('轨道画在惯性空间中，地球在其中自转。预测假设不再有推力、指向模式不变（手动模式下即惯性姿态不变）。拖动旋转，滚轮缩放。', 'Orbits are drawn in inertial space; Earth rotates within it. Prediction assumes no further thrust and an unchanged pointing mode (fixed inertial attitude in manual mode). Drag to rotate; scroll to zoom.')}
           </p>

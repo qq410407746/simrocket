@@ -46,7 +46,7 @@ export function MissionStrip() {
         {mission.objectives.map((objective, i) => {
           const status = state.objectives[i]?.status ?? 'pending';
           const mark = OBJECTIVE_MARK[status];
-          const progress = objectiveProgress(objective.spec, status, telemetry, stats, state, language);
+          const progress = objectiveProgress(objective.spec, status, telemetry, stats, state, language, objective.id);
           return (
             <span key={objective.id} className="flex items-baseline gap-1 whitespace-nowrap" data-testid={`objective-${objective.id}`} data-status={status}>
               <span className={`font-semibold ${mark.tone}`}>{mark.mark}</span>

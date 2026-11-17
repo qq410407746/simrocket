@@ -11,6 +11,11 @@ export interface SnapshotMeta {
 
 /** 把模拟器当前状态打包成快照。 */
 export const buildSnapshot = (sim: Simulation, meta: SnapshotMeta): SimSnapshot => ({
+  maneuver: sim.maneuverState,
+  satelliteDeployedAt: sim.deployedAt,
+  analyticCoast: sim.analyticCoast,
+  analyticSince: sim.analyticSince,
+  lastOrbitChangeTime: sim.lastOrbitChangeTime,
   seq: meta.seq,
   simTime: sim.time,
   timeWarp: meta.timeWarp,

@@ -5,7 +5,7 @@ import { type AttitudeMode, SURFACE_REFERENCE_ALTITUDE, pointingDirection } from
 import { EARTH, RAD2DEG } from '@/game/physics/constants';
 import { enuBasisAt } from '@/game/physics/frames/frames';
 import { rotate } from '@/game/physics/math/quat';
-import { dot, length, vec3 } from '@/game/physics/math/vec3';
+import { dot, length, normalize, vec3 } from '@/game/physics/math/vec3';
 import { useI18n } from '@/i18n';
 import { frameState } from '@/rendering/core/frameState';
 import { simRuntime } from '@/stores/simRuntime';
@@ -121,7 +121,7 @@ const createBallTexture = (): CanvasTexture => {
 
 type MarkerMode = Exclude<AttitudeMode, 'manual'>;
 
-const MARKER_MODES: readonly MarkerMode[] = ['prograde', 'retrograde', 'normal', 'antinormal', 'radial-out', 'radial-in'];
+const MARKER_MODES: readonly MarkerMode[] = ['prograde', 'retrograde', 'normal', 'antinormal', 'radial-out', 'radial-in', 'maneuver'];
 
 /** 各参考方向的标记图案。 */
 const createMarkerTexture = (mode: MarkerMode): CanvasTexture => {
@@ -132,7 +132,7 @@ const createMarkerTexture = (mode: MarkerMode): CanvasTexture => {
   const ctx = canvas.getContext('2d');
   if (ctx) {
     const c = size / 2;
-    const color = mode === 'prograde' || mode === 'retrograde' ? '#d7ff3c' : mode === 'normal' || mode === 'antinormal' ? '#ff6bd6' : '#4be3ff';
+    const color = mode === 'maneuver' ? '#c4a5ff' : mode === 'prograde' || mode === 'retrograde' ? '#d7ff3c' : mode === 'normal' || mode === 'antinormal' ? '#ff6bd6' : '#4be3ff';
     ctx.strokeStyle = color;
     ctx.fillStyle = color;
     ctx.lineWidth = 9;
@@ -151,6 +151,11 @@ const createMarkerTexture = (mode: MarkerMode): CanvasTexture => {
       else ctx.stroke();
     };
     switch (mode) {
+      case 'maneuver':
+        line(0, -38, 38, 0); line(38, 0, 0, 38);
+        line(0, 38, -38, 0); line(-38, 0, 0, -38);
+        circle(5, true);
+        break;
       case 'prograde':
         // 圆 + 中心点 + 上、左、右三条短线
         circle(26);
@@ -244,7 +249,10 @@ function Ball() {
       const sprite = markers.current[i];
       if (!sprite) return;
       const velocityMarker = mode === 'prograde' || mode === 'retrograde';
-      const direction = velocityMarker || orbital ? pointingDirection(mode, position, velocity) : null;
+      const remaining = frameState.snapshot?.maneuver?.remaining;
+      const direction = mode === 'maneuver'
+        ? remaining && length(remaining) > 0.1 ? normalize(remaining) : null
+        : velocityMarker || orbital ? pointingDirection(mode, position, velocity) : null;
       if (!direction) {
         sprite.visible = false;
         return;

@@ -10,6 +10,8 @@ import type { LaunchDirection } from '../physics/orbital/launch';
 export interface OrbitRequirement {
   /** 近地点不低于该高度。 */
   readonly minPeriapsis: number;
+  readonly minApoapsis?: number;
+  readonly maxPeriapsis?: number;
   /** 远地点不高于该高度。 */
   readonly maxApoapsis: number;
   /** 倾角要求：目标值 ± 容差。不填则不限倾角。 */
@@ -25,7 +27,9 @@ export interface OrbitRequirement {
 export type ObjectiveSpec =
   | { readonly kind: 'reach-altitude'; readonly altitude: number }
   | ({ readonly kind: 'orbit' } & OrbitRequirement)
-  | { readonly kind: 'land-capsule' };
+  | { readonly kind: 'land-capsule' }
+  | { readonly kind: 'deploy-satellite' }
+  | { readonly kind: 'synchronous'; readonly stationary: boolean; readonly deployed?: boolean };
 
 export interface ObjectiveDefinition {
   readonly id: string;
@@ -52,7 +56,9 @@ export type MetricId =
   /** 全程最大高度 [m]。 */
   | 'max-altitude'
   /** 落点到发射场的地面距离 [m]。 */
-  | 'downrange';
+  | 'downrange'
+  | 'period-error'
+  | 'longitude-span';
 
 /**
  * 评分规则。
@@ -77,7 +83,7 @@ export interface ScoreItemDefinition {
   readonly note: string;
 }
 
-export type MissionCategory = 'suborbital' | 'orbital' | 'return';
+export type MissionCategory = 'suborbital' | 'orbital' | 'return' | 'advanced';
 
 /** 任务定义。 */
 export interface MissionDefinition {
@@ -155,6 +161,7 @@ export interface MissionState {
   readonly endedAt: number | null;
   /** 轨道连续满足要求的起始模拟时间 [s]；当前不满足时为 null。 */
   readonly orbitHoldSince: number | null;
+  readonly orbitObjectiveId?: string;
   /** 轨道目标确认时的轨道；没有轨道目标或尚未确认时为 null。 */
   readonly confirmedOrbit: ConfirmedOrbit | null;
   /** 防热大底烧蚀层出现过的最小剩余比例；飞行器没有（或从未露出）防热大底时为 null。 */

@@ -38,7 +38,7 @@ export const planManeuver = (r: Vec3, v: Vec3, now: number, node: ManeuverNode):
   if (!Number.isFinite(now) || !validNode(node) || node.time < now || length(r) <= EARTH.RADIUS) return null;
   const at = propagateKepler(r, v, node.time - now);
   const basis = maneuverBasis(at.position, at.velocity);
-  if (!basis || !isFiniteVec3(at.position)) return null;
+  if (!basis || !isFiniteVec3(at.position) || length(at.position) <= EARTH.RADIUS) return null;
   const deltaVelocity = add(add(scale(basis.prograde, node.prograde), scale(basis.radial, node.radial)), scale(basis.normal, node.normal));
   const after = { position: at.position, velocity: add(at.velocity, deltaVelocity) };
   return { node, ...at, deltaVelocity, after };

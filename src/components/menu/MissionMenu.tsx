@@ -14,7 +14,7 @@ import { simRuntime } from '@/stores/simRuntime';
 import { CATEGORY_LABEL, GRADE_TONE } from '../hud/missionLabels';
 
 const padDegrees = (value: number): string => String(Math.round(value) % 360).padStart(3, '0');
-const CATEGORY_EN = { suborbital: 'Suborbital', orbital: 'Low Earth orbit', return: 'Return' };
+const CATEGORY_EN = { suborbital: 'Suborbital', orbital: 'Low Earth orbit', return: 'Return', advanced: '高级轨道' };
 
 /** 任务列表：按目录顺序排列，显示解锁与完成情况。 */
 export function MissionList() {

@@ -1096,7 +1096,7 @@ test.describe('任务系统（阶段五）', () => {
     // 默认页签是"任务"，选中第一个任务，右侧是它的简报
     await expect(page.getByTestId('tab-missions')).toHaveAttribute('aria-selected', 'true');
     await expect(page.getByTestId('mission-list')).toBeVisible();
-    await expect(page.getByTestId('mission-progress')).toHaveText('已完成 0 / 7');
+    await expect(page.getByTestId('mission-progress')).toHaveText('已完成 0 / 8');
     await expect(page.getByTestId('mission-karman-line')).toHaveAttribute('data-state', 'open');
     await expect(page.getByTestId('mission-karman-line')).toHaveAttribute('aria-pressed', 'true');
     for (const id of ['suborbital-hop', 'first-orbit', 'crew-return', 'orbital-flight', 'inclined-orbit', 'polar-orbit']) {
@@ -1163,7 +1163,7 @@ test.describe('任务系统（阶段五）', () => {
     // 回到主菜单：任务还没有结论，不计入任务进度；什么都没做的飞行不留记录
     await page.getByTestId('menu-button').click();
     await expect(page.getByTestId('main-menu')).toBeVisible();
-    await expect(page.getByTestId('mission-progress')).toHaveText('已完成 0 / 7');
+    await expect(page.getByTestId('mission-progress')).toHaveText('已完成 0 / 8');
     const career = await readCareer(page);
     expect(career?.progress['crew-return']).toBeUndefined();
     expect(career?.logbook ?? []).toHaveLength(0);
@@ -1264,7 +1264,7 @@ test.describe('任务系统（阶段五）', () => {
 
     // 回到主菜单：任务列表反映进度；飞行记录里有这次飞行
     await page.getByTestId('menu-button').click();
-    await expect(page.getByTestId('mission-progress')).toHaveText('已完成 1 / 7');
+    await expect(page.getByTestId('mission-progress')).toHaveText('已完成 1 / 8');
     await expect(page.getByTestId('mission-karman-line')).toHaveAttribute('data-state', 'completed');
     await expect(page.getByTestId('mission-karman-line')).toContainText('S');
     await expect(page.getByTestId('mission-suborbital-hop')).toHaveAttribute('data-state', 'open');
@@ -1283,7 +1283,7 @@ test.describe('任务系统（阶段五）', () => {
     await waitForRunning(page);
     await expect(page.getByTestId('logbook-entry')).toHaveCount(1);
     await page.getByTestId('tab-missions').click();
-    await expect(page.getByTestId('mission-progress')).toHaveText('已完成 1 / 7');
+    await expect(page.getByTestId('mission-progress')).toHaveText('已完成 1 / 8');
     await expect(page.getByTestId('mission-suborbital-hop')).toHaveAttribute('data-state', 'open');
     expect(problems).toEqual([]);
   });

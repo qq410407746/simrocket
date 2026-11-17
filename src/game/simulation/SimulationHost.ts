@@ -34,7 +34,7 @@ const RATE_SMOOTHING_TIME = 0.5;
 
 export class SimulationHost {
   private simulation: Simulation | null = null;
-  private readonly clock = new FixedStepClock(PHYSICS_DT, MAX_STEPS_PER_TICK);
+  private readonly clock = new FixedStepClock(PHYSICS_DT, 1_250_000);
   private paused = false;
   /** 玩家指令的时间倍率。实际倍率还受物理状态限制，见 effectiveWarp。 */
   private timeWarp: TimeWarp = 1;
@@ -108,6 +108,15 @@ export class SimulationHost {
         case 'setBankAngle':
           sim?.setBankAngle(command.angle);
           break;
+        case 'setManeuver':
+          sim?.setManeuver(command.node);
+          break;
+        case 'pulseBurn':
+          sim?.pulseBurn(command.duration);
+          break;
+        case 'deploySatellite':
+          sim?.deploySatellite();
+          break;
         case 'dispose':
           this.simulation = null;
           return;
@@ -135,20 +144,24 @@ export class SimulationHost {
         let warp = clampTimeWarp(this.timeWarp, sim.maxTimeWarp);
         const { steps, requested, dropped } = this.clock.advance(wallDt, warp);
         let executed = 0;
-        for (; executed < steps; executed++) {
-          sim.step();
+        let limited = false;
+        let calls = 0;
+        while (executed < steps && calls++ < MAX_STEPS_PER_TICK) {
+          const coast = sim.coastSteps(steps - executed);
+          if (coast > 0) executed += coast;
+          else { sim.step(); executed++; }
           const limit = sim.maxTimeWarp;
           if (limit < warp) {
             // 条件变严：本 tick 剩余的步数按新倍率折算后丢弃（不计入"跟不上"的统计）。
             warp = limit;
-            executed++;
+            limited = true;
             this.clock.reset();
             break;
           }
         }
         if (this.timeWarp > warp) this.timeWarp = warp;
-        if (requested > 0 && executed === steps) {
-          const ratio = 1 - dropped / requested;
+        if (requested > 0 && !limited) {
+          const ratio = Math.max(0, 1 - (dropped + (steps - executed) * PHYSICS_DT) / requested);
           const alpha = 1 - Math.exp(-wallDt / RATE_SMOOTHING_TIME);
           this.achievedRatio += (ratio - this.achievedRatio) * alpha;
         }

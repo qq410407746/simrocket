@@ -58,7 +58,9 @@ import { gravityAcceleration } from '../physics/gravity/pointMass';
 import { type AccelerationFn, type MutableVec3, Rk4Integrator } from '../physics/integration/rk4';
 import { type Quat, fromAxisAngle, isFiniteQuat, multiply, rotate } from '../physics/math/quat';
 import { type Vec3, UNIT_Z, addScaled, cross, dot, isFiniteVec3, length, normalize, sub, vec3 } from '../physics/math/vec3';
-import { elementsFromState } from '../physics/orbital/elements';
+import { propagateKepler } from '../physics/orbital/kepler';
+import { vacuumCoastWindow, planManeuver, type ManeuverNode, type ManeuverPlan } from '../physics/orbital/advanced';
+import { elementsFromState, timeToApoapsis } from '../physics/orbital/elements';
 import { engineMassFlow, engineThrust } from '../physics/propulsion/engine';
 import type { RigidBodyState } from '../physics/state/types';
 import { type ThermalZoneId, environmentTemperature, exposure, stagnationHeatFlux } from '../physics/thermodynamics/heating';
@@ -425,6 +427,80 @@ export class Simulation {
   readonly earthAngleAtEpoch: number;
 
   private stepCount = 0;
+  private maneuver: (ManeuverPlan & { remaining: Vec3 }) | null = null;
+  private satelliteDeployedAt: number | null = null;
+  analyticCoast = false;
+  analyticSince: number | null = null;
+  lastOrbitChangeTime = 0;
+  get maneuverState() { return this.maneuver ? structuredClone(this.maneuver) : null; }
+  get deployedAt() { return this.satelliteDeployedAt; }
+  setManeuver(node: ManeuverNode | null): void {
+    if (node === null) { this.maneuver = null; if (this.attitudeMode === 'maneuver') this.attitudeMode = 'manual'; return; }
+    if (this.phase !== 'flight' || this.throttle > 0) return;
+    const plan = planManeuver(this.r, this.v, this.time, node);
+    if (plan) this.maneuver = { ...plan, remaining: plan.deltaVelocity };
+  }
+  deploySatellite(): void {
+    if (this.phase !== 'flight' || this.vehicle.payload.kind !== 'satellite' || this.cfg.fairingAttached || this.throttle > 0 || this.satelliteDeployedAt !== null) return;
+    if (lowestAttachedStage(this.cfg) !== this.vehicle.stages.length - 1) return;
+    // stage 负责质量、质心与动量守恒；已关机时仍需跨过首次启用分支。
+    this.ignited = true;
+    this.stage();
+  }
+  /** 按部署按钮或直接分离最后一级都代表同一真实部署事件。 */
+  private detectSatelliteDeployment(): void {
+    if (this.satelliteDeployedAt !== null || this.vehicle.payload.kind !== 'satellite' || this.cfg.fairingAttached) return;
+    if (lowestAttachedStage(this.cfg) < this.vehicle.stages.length) return;
+    this.satelliteDeployedAt = this.time;
+    this.setManeuver(null);
+  }
+  /** 合并整数个真空物理步。含分离体时保留数值路径，绝不跳过它们的落地事件。 */
+  coastSteps(requested: number): number {
+    if (!Number.isFinite(requested) || requested < 2 || !this.canCoast()) return 0;
+    let window = vacuumCoastWindow(this.r, this.v);
+    if (this.maneuver) window = Math.min(window, Math.max(0, this.maneuver.node.time - this.time - this.maneuverApproachTime));
+    const steps = Math.floor(Math.min(requested, 60 / this.dt, window / this.dt));
+    if (steps < 2) return 0;
+    const elapsed = steps * this.dt;
+    if (this.analyticSince === null) this.analyticSince = this.time;
+    const before = elementsFromState(this.r, this.v);
+    const apoTime = timeToApoapsis(before);
+    const next = propagateKepler(this.r, this.v, elapsed);
+    if (!isFiniteVec3(next.position) || !isFiniteVec3(next.velocity)) return 0;
+    Object.assign(this.r, next.position); Object.assign(this.v, next.velocity);
+    this.stepCount += steps;
+    // 快速滑行仅在姿态已稳定后启用；轨道参考方向慢变，按最短旋转跟随。
+    const target = this.attitudeMode === 'maneuver' && this.maneuver ? normalize(this.maneuver.remaining) : pointingDirection(this.attitudeMode, this.r, this.v);
+    if (target) {
+      const nose = rotate(this.attitude, BODY_X), axis = cross(nose, target);
+      const angle = Math.atan2(length(axis), dot(nose, target));
+      if (length(axis) > 1e-12) this.attitude = multiply(fromAxisAngle(normalize(axis), angle), this.attitude);
+    }
+    this.omega = vec3(0, 0, 0); this.lastPointing = null;
+    this.forces.thrustVacuum = 0; this.forces.massFlow = 0;
+    this.forces.evaluate(this.r, this.v);
+    this.diagnostics = { ...ZERO_DIAGNOSTICS, airspeed: this.forces.airspeed };
+    this.specificForce = vec3(0, 0, 0);
+    const failure = this.stepThermal(elapsed);
+    this.updateStats();
+    if (apoTime !== null && apoTime <= elapsed) this.stats.maxAltitude = Math.max(this.stats.maxAltitude, before.apoapsisRadius - EARTH.RADIUS);
+    if (failure) this.failInFlight(THERMAL_FAILURE_CAUSE[failure.failure], failure.zone);
+    this.analyticCoast = true;
+    return steps;
+  }
+  private get maneuverApproachTime(): number {
+    const propulsion = activePropulsion(this.vehicle, this.cfg);
+    if (!this.maneuver || !propulsion) return 120;
+    const ve = STANDARD_GRAVITY * propulsion.engine.ispVacuum;
+    const duration = this.mass * (1 - Math.exp(-length(this.maneuver.deltaVelocity) / ve)) / (propulsion.engine.thrustVacuum * propulsion.engineCount / ve);
+    return Math.max(120, duration / 2 + 60);
+  }
+  private canCoast(): boolean {
+    if (this.phase !== 'flight' || this.debris.length > 0 || this.throttle > 0 || this.parachuteArea > 0 || this.attitudeMode === 'trim') return false;
+    if (this.attitudeInput.pitch || this.attitudeInput.yaw || this.attitudeInput.roll || length(this.omega) > 0.002) return false;
+    const target = this.attitudeMode === 'maneuver' && this.maneuver ? normalize(this.maneuver.remaining) : pointingDirection(this.attitudeMode, this.r, this.v);
+    return !target || dot(rotate(this.attitude, BODY_X), target) > 0.99999;
+  }
   private phase: FlightPhase = 'prelaunch';
 
   // —— 构型（结构上满足 ConfigurationState，可直接传给构型相关的纯函数）——
@@ -441,6 +517,7 @@ export class Simulation {
 
   // —— 控制 ——
   private throttle = 1;
+  private pulseEndStep: number | null = null;
   private ignited = false;
   private attitudeInput: AttitudeInput = NO_ATTITUDE_INPUT;
   private attitudeMode: AttitudeMode = 'manual';
@@ -606,7 +683,7 @@ export class Simulation {
     const steering = this.attitudeInput.pitch !== 0 || this.attitudeInput.yaw !== 0 || this.attitudeInput.roll !== 0;
     if (this.phase === 'prelaunch') return this.ignited && this.throttle > 0 ? WARP_LIMIT_POWERED : WARP_LIMIT_NONE;
     if (this.phase !== 'flight') return WARP_LIMIT_NONE;
-    if (this.diagnostics.thrust > 0 || steering) return WARP_LIMIT_POWERED;
+    if (this.diagnostics.thrust > 0 || (this.ignited && this.throttle > 0) || steering) return WARP_LIMIT_POWERED;
     const altitude = Math.hypot(this.r.x, this.r.y, this.r.z) - EARTH.RADIUS;
     if (altitude < ATMOSPHERE_WARP_ALTITUDE) return WARP_LIMIT_ATMOSPHERE;
     if (this.parachutePhase === 'drogue' || this.parachutePhase === 'main') return WARP_LIMIT_ATMOSPHERE;
@@ -614,7 +691,8 @@ export class Simulation {
     for (const zone of this.thermalZones) {
       if (zone.state.convectiveFlux > HEATING_WARP_THRESHOLD) return WARP_LIMIT_ATMOSPHERE;
     }
-    return WARP_LIMIT_NONE;
+    if (this.maneuver && this.maneuver.node.time - this.time <= this.maneuverApproachTime + this.dt) return WARP_LIMIT_POWERED;
+    return this.canCoast() && vacuumCoastWindow(this.r, this.v) > 2 * this.dt ? 100000 : WARP_LIMIT_NONE;
   }
 
   /** 取出并清空自上次调用以来发生的事件。 */
@@ -696,7 +774,20 @@ export class Simulation {
 
   /** 节流指令 [0, 1]。无效数值被忽略。 */
   setThrottle(throttle: number): void {
-    if (Number.isFinite(throttle)) this.throttle = clamp01(throttle);
+    if (Number.isFinite(throttle)) {
+      this.pulseEndStep = null;
+      this.throttle = clamp01(throttle);
+    }
+  }
+
+  /** 玩家主动触发的短脉冲，按物理时间关机，不依赖界面刷新率。 */
+  pulseBurn(duration: number): void {
+    if (!Number.isFinite(duration) || duration <= 0 || duration > 1 || this.phase !== 'flight' || this.throttle > 0) return;
+    const propulsion = activePropulsion(this.vehicle, this.cfg);
+    if (!propulsion || propulsion.propellantMass <= 0) return;
+    if (!this.ignited) this.stage();
+    this.throttle = 1;
+    this.pulseEndStep = this.stepCount + Math.max(1, Math.round(duration / this.dt));
   }
 
   setAttitudeInput(input: AttitudeInput): void {
@@ -709,6 +800,7 @@ export class Simulation {
    */
   setAttitudeMode(mode: AttitudeMode): void {
     if (!isAttitudeMode(mode)) return;
+    if (mode === 'maneuver' && !this.maneuver) return;
     if (mode === 'trim' && !(this.trimAngle > 0)) return;
     this.attitudeMode = mode;
   }
@@ -728,6 +820,7 @@ export class Simulation {
    *   飞行中，其余情况 → 分离当前最低一级，并点燃它上面的推进级。
    */
   stage(): void {
+    if (this.pulseEndStep !== null) this.setThrottle(0);
     if (this.phase === 'prelaunch') {
       if (!this.ignited) {
         this.ignited = true;
@@ -855,17 +948,21 @@ export class Simulation {
     // 质心在箭体内的位置变了：把状态点移到新的质心上（箭体本身没有移动）。
     this.shiftPosition(nose, this.centerOfMassHeight - oldCom);
     this.emit('fairing', -1);
+    this.detectSatelliteDeployment();
   }
 
   // ───────────────────────────── 推进 ─────────────────────────────
 
   /** 推进一个固定物理步。 */
   step(): void {
+    this.analyticCoast = false;
+    this.analyticSince = null;
     const t0 = this.time;
     this.stepCount += 1;
     if (this.phase === 'prelaunch') this.stepOnPad(t0);
     else if (this.phase === 'flight') this.stepFlight(t0);
     if (this.debris.length > 0) this.stepDebris(t0);
+    if (this.pulseEndStep !== null && this.stepCount >= this.pulseEndStep) this.setThrottle(0);
   }
 
   /**
@@ -957,9 +1054,16 @@ export class Simulation {
       fm.t0 = t;
       const elapsed = this.integrateSegment(t, burnTime, nose);
       t += elapsed;
+      if (elapsed > 0) this.lastOrbitChangeTime = this.time;
       // 残量小于一微克视为耗尽（含"恰好在步末烧完"的情形）。
       const depleted = propulsion.propellantMass - massFlow * elapsed <= 1e-9;
       this.consumePropellant(propulsion, depleted ? propulsion.propellantMass : massFlow * elapsed);
+      if (this.maneuver) {
+        // RK4末端压力给出这一小段的有效排气速度；真空时退化为火箭方程。
+        const effectiveExhaust = fm.thrust / massFlow;
+        const delivered = effectiveExhaust * Math.log(this.mass / (this.mass - massFlow * elapsed));
+        this.maneuver.remaining = addScaled(this.maneuver.remaining, nose, -delivered);
+      }
       this.refreshConfiguration();
       if (depleted) this.emit('depleted', propulsion.stageIndex);
       burning = !depleted;
@@ -1126,7 +1230,9 @@ export class Simulation {
       return commandedBodyRate(input, ATTITUDE_CONTROL);
     }
     const bankRate = trimming ? this.advanceBank(input.roll) : 0;
-    const target = pointingDirection(this.attitudeMode, this.r, this.v, { angle: this.trimAngle, bank: this.bankAngle });
+    const target = this.attitudeMode === 'maneuver'
+      ? (this.maneuver && length(this.maneuver.remaining) > 0.1 ? normalize(this.maneuver.remaining) : null)
+      : pointingDirection(this.attitudeMode, this.r, this.v, { angle: this.trimAngle, bank: this.bankAngle });
     if (!target) {
       this.lastPointing = null;
       return vec3(0, 0, 0);
@@ -1406,6 +1512,7 @@ export class Simulation {
     this.v.y += nose.y * vehicleKick;
     this.v.z += nose.z * vehicleKick;
     this.emit('separation', index);
+    this.detectSatelliteDeployment();
   }
 
   private addDebris(init: {
@@ -1457,6 +1564,11 @@ export class Simulation {
   // ───────────────────────────── 内部辅助 ─────────────────────────────
 
   private emit(kind: FlightEventKind, stageIndex: number): void {
+    if (['separation', 'fairing', 'heat-shield'].includes(kind)) {
+      this.lastOrbitChangeTime = this.time;
+      this.analyticSince = null;
+      this.analyticCoast = false;
+    }
     this.events.push({ kind, time: this.time, stageIndex });
   }
 

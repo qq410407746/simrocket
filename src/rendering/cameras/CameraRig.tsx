@@ -74,6 +74,7 @@ interface Transition {
  * 并把相机放到渲染空间原点（浮动原点），只设置其朝向与裁剪面。
  */
 export function CameraRig() {
+  const lastManeuverKey = useRef('');
   const camera = useThree((s) => s.camera) as PerspectiveCamera;
   const gl = useThree((s) => s.gl);
   const size = useThree((s) => s.size);
@@ -170,11 +171,17 @@ export function CameraRig() {
       tanHalfFovX: tanHalfFovY * aspect,
     });
 
-    if (wanted !== mode.current) {
+    const plan = simRuntime.snapshots.latest?.maneuver;
+    const node = plan?.node;
+    const maneuverKey = node ? `${node.time}|${node.prograde}|${node.radial}|${node.normal}` : '';
+    const refitManeuver = wanted === 'map' && !!plan && maneuverKey !== lastManeuverKey.current;
+    if (wanted !== mode.current || refitManeuver) {
       if (wanted === 'map') {
         // 每次进入轨道地图都按当前轨道重新取景
         const elements = elementsFromState(frameState.vehiclePosition, frameState.vehicleVelocity);
-        allParams.map = fitMapView(frameState.vehiclePosition, frameState.vehicleVelocity, elements.apoapsisRadius);
+        const previewRadius = plan ? elementsFromState(plan.after.position, plan.after.velocity).apoapsisRadius : 0;
+        allParams.map = fitMapView(frameState.vehiclePosition, frameState.vehicleVelocity, Math.max(elements.apoapsisRadius, previewRadius));
+        lastManeuverKey.current = maneuverKey;
       }
       const from = lastPose.current;
       const to = computeCameraPose(baseMode(wanted), allParams[wanted], ctxFor(wanted));

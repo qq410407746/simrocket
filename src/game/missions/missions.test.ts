@@ -400,6 +400,7 @@ describe('任务进度与解锁', () => {
       'first-orbit',
       'crew-return',
       'inclined-orbit',
+      'geo-deployment',
     ]);
     expect(completedCount(MISSION_CATALOG, progress)).toBe(3);
     // "全部解锁"开关
@@ -700,5 +701,42 @@ describe('任务目录的自洽性', () => {
       expect(m.launch?.inclination, m.id).toBe(requirement.inclination.target);
       expect(requirement.inclination.tolerance, m.id).toBeGreaterThan(1 * DEG2RAD);
     }
+  });
+});
+
+
+describe('高级任务的顺序与连续确认', () => {
+  const geo = mission('geo-deployment');
+  it('NaN 不能满足轨道条件；采样之间的短点火会重新开始十秒确认', () => {
+    const first = mission('first-orbit');
+    expect(orbitMeets(withOrbit({ periapsisAltitude: NaN }), missionOrbitRequirement(first)!)).toBe(false);
+    let state = createMissionState(first);
+    state = updateMission(first, state, input(at(100)));
+    state = updateMission(first, state, input(at(115, { lastOrbitChangeTime: 112 })));
+    expect(state.status).toBe('active');
+    expect(state.orbitHoldSince).toBe(115);
+    state = updateMission(first, state, input(at(125, { lastOrbitChangeTime: 112 })));
+    expect(state.status).toBe('success');
+  });
+  it('停泊轨道和 GTO 分别保持十秒，不能继承前一目标的计时', () => {
+    let state = createMissionState(geo);
+    state = feed(geo, state, [input(at(100)), input(at(110))]);
+    expect(state.objectives[0]?.status).toBe('done');
+    const gtoOrbit = withOrbit({ periapsisAltitude: 200_000, apoapsisAltitude: 35_793_000 });
+    state = updateMission(geo, state, input(at(200, { orbit: gtoOrbit })));
+    expect(state.objectives[1]?.status).toBe('pending');
+    expect(orbitHoldProgress(state, 205)).toBeCloseTo(0.5);
+    state = updateMission(geo, state, input(at(210, { orbit: gtoOrbit })));
+    expect(state.objectives[1]?.status).toBe('done');
+    expect(state.objectives.slice(2).every((o) => o.status === 'pending')).toBe(true);
+  });
+  it('错误轨道上提前部署且已无推进能力时失败，不会无限等待 GEO', () => {
+    let state = feed(geo, createMissionState(geo), [input(at(100)), input(at(110))]);
+    const orbit = withOrbit({ periapsisAltitude: 200_000, apoapsisAltitude: 35_793_000 });
+    state = feed(geo, state, [input(at(200, { orbit })), input(at(210, { orbit }))]);
+    state = updateMission(geo, state, input(at(220, { orbit, satelliteDeployedAt: 215, remainingDeltaV: 0,
+      synchronous: { gso: false, geo: false, longitudeSpan: null, periodError: 50_000 } })));
+    expect(state.status).toBe('failed');
+    expect(state.failure).toBe('out-of-propellant');
   });
 });

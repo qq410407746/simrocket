@@ -1,11 +1,17 @@
 import { type Page, expect, test } from '@playwright/test';
 
 const expectEnglishPage = async (page: Page) => {
-  const content = await page.locator('body').innerText();
+  // 阶段六新增界面按当前要求仅提供中文；原七个任务继续验证英文回归。
+  const content = await page.locator('body').evaluate((body) => {
+    const copy = body.cloneNode(true) as HTMLElement;
+    copy.querySelector('[data-testid="mission-geo-deployment"]')?.closest('li')?.remove();
+    copy.querySelector('[data-testid="maneuver-panel"]')?.remove();
+    return copy.textContent ?? '';
+  });
   // The switch keeps the native Chinese option discoverable in either language.
   expect(content.replaceAll('简体中文', '')).not.toMatch(/\p{Script=Han}/u);
   const attributes = await page.locator('[title], [aria-label]').evaluateAll((elements) =>
-    elements.map((element) => `${element.getAttribute('title') ?? ''} ${element.getAttribute('aria-label') ?? ''}`).join('\n'),
+    elements.filter((element) => !element.closest('[data-testid="maneuver-panel"]')).map((element) => `${element.getAttribute('title') ?? ''} ${element.getAttribute('aria-label') ?? ''}`).join('\n'),
   );
   expect(attributes).not.toMatch(/\p{Script=Han}/u);
 };
@@ -43,7 +49,7 @@ test('all seven mission briefings and in-flight guidance are available in Englis
   await page.goto('/');
   await page.getByTestId('language-en').click();
   await page.getByTestId('unlock-all').check();
-  const missions = page.locator('[data-testid="mission-list"] button');
+  const missions = page.locator('[data-testid="mission-list"] button:not([data-testid="mission-geo-deployment"])');
   await expect(missions).toHaveCount(7);
   for (const mission of await missions.all()) {
     await mission.click();

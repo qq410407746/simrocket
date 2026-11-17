@@ -1,3 +1,4 @@
+import type { ManeuverNode } from '@/game/physics/orbital/advanced';
 /**
  * 模拟运行时：连接"物理线程 ↔ 状态 store ↔ 渲染"的唯一枢纽（模块级单例）。
  *
@@ -115,6 +116,11 @@ class SimRuntime {
     if (this.config) this.start(this.config, this.context);
   }
 
+  setManeuver(node: ManeuverNode | null): void {
+    this.client?.send({ type: 'setManeuver', node });
+  }
+  pulseBurn(duration: number): void { this.client?.send({ type: 'pulseBurn', duration }); }
+  deploySatellite(): void { this.client?.send({ type: 'deploySatellite' }); }
   setPaused(paused: boolean): void {
     this.client?.send({ type: 'setPaused', paused });
   }

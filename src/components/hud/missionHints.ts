@@ -171,6 +171,15 @@ export const missionFlightHint = (
   if (!t || !mission || !state || state.status !== 'active' || t.phase !== 'flight') return generic;
   if (generic?.tone === 'warn') return generic;
 
+  if (mission.id === 'geo-deployment') {
+    const current = state.objectives.find((objective) => objective.status === 'pending')?.id;
+    if (current === 'gto') return { text: '打开地图规划 GTO 注入；按半燃烧时长提前点火，远地点约35793 km后关机，保持十秒确认。', tone: 'info' };
+    if (current === 'geo') return { text: '规划赤道圆化，在远地点附近同时升近地点并消除倾角；关机后检查周期、偏心率与星下点经度摆幅。', tone: 'info' };
+    if (current === 'deploy') return { text: 'GEO 已确认：关机，在地图机动面板点击“部署卫星”。部署后无法再修正轨道。', tone: 'info' };
+    if (current === 'confirm') return { text: '卫星已部署：关机保持十秒，检查分离冲量后的 GEO。', tone: 'info' };
+    if (t.activeStageIndex === 0 && t.attitudeMode === 'manual' && t.pitch * RAD2DEG > 88) return { text: '先竖直上升到60 m/s，再轻按 D 向东倾斜约1°，松开后用顺行保持完成重力转弯。', tone: 'info' };
+  }
+
   const guidance = launchGuidance(mission, latitude);
   const ascent = ascentHint(t, mission, guidance, language);
   if (ascent) return ascent;
