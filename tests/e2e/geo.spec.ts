@@ -30,12 +30,13 @@ test('暂停时规划三分量节点、预览与地面轨迹不改变物理状�
   await page.getByTestId('pause-button').click();
   await expect(page.getByTestId('pause-button')).toHaveAttribute('aria-label', '继续');
   await page.getByTestId('camera-map').click();
-  await page.getByTestId('maneuver-panel').locator('summary').click();
+  await page.getByTestId('maneuver-panel').locator(':scope > summary').click();
   const before = await page.evaluate(() => JSON.stringify((window as unknown as {
     __orbitalFrontier: { snapshot(): { vehicle: unknown } };
   }).__orbitalFrontier.snapshot().vehicle));
   await page.getByTestId('plan-gto').click();
   await expect(page.getByTestId('maneuver-status')).toContainText('预计满推力燃烧');
+  await page.getByTestId('maneuver-editor').locator('summary').click();
   await page.getByLabel('顺行增量', { exact: true }).fill('100');
   await page.getByLabel('径向增量', { exact: true }).fill('-20');
   await page.getByLabel('法向增量', { exact: true }).fill('30');
@@ -50,7 +51,12 @@ test('暂停时规划三分量节点、预览与地面轨迹不改变物理状�
   await page.getByRole('button', { name: '更新所选节点' }).click();
   await expect(page.getByTestId('maneuver-panel').getByRole('status')).toContainText('节点无效');
   await expect(page.getByTestId('maneuver-status')).toContainText('顺行 100.0');
+  await page.getByTestId('maneuver-editor').locator('summary').click();
+  await page.getByTestId('plan-gto').click();
+  await page.getByTestId('map-overlay').evaluate((element) => { element.scrollTop = 0; });
   await page.screenshot({ path: info.outputPath('阶段六机动规划.png') });
+  await page.getByTestId('ground-track').scrollIntoViewIfNeeded();
+  await page.screenshot({ path: info.outputPath('阶段六地面轨迹.png') });
 });
 
 /** 只读仪表，通过现有按钮和键盘飞行；不写快照、不调用物理内部方法。 */

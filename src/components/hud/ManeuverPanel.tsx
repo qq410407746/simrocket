@@ -11,8 +11,8 @@ import { simRuntime } from '@/stores/simRuntime';
 export function ManeuverPanel() {
   const telemetry = useSimStore((s) => s.telemetry);
   const [delay, setDelay] = useState(600);
-  const [dv, setDv] = useState({prograde:0,radial:0,normal:0});
-  const [notice,setNotice] = useState('');
+  const [dv, setDv] = useState({ prograde: 0, radial: 0, normal: 0 });
+  const [notice, setNotice] = useState('');
   const snap = simRuntime.snapshots.latest;
   if (!snap || !telemetry || telemetry.phase !== 'flight') return null;
   const plan = snap.maneuver;
@@ -31,19 +31,12 @@ export function ManeuverPanel() {
   const button = 'rounded border border-line px-2 py-1 text-ink hover:border-data disabled:opacity-40';
   return <details className="mt-2 border-t border-line pt-2" data-testid="maneuver-panel">
     <summary className="cursor-pointer text-data">高级轨道：机动规划与地面轨迹</summary>
-    <p>双击青色轨道选择节点位置；在下方填写增量后点击“更新所选节点”。也可用延时或快捷草案创建。紫色：点火后预览轨道；绿色：任务目标轨道（未约束的轨道面沿用当前方向）。</p>
-    <p className="my-2">节点为瞬时点火预览；实际发动机有限时长。先按预计燃烧时长的一半提前点火，再按剩余 Δv 关机，最后核对轨道。GTO 点火若剩余量接近零但远地点仍偏低，改顺行补推至远地点约35793 km。</p>
     <div className="flex flex-wrap gap-1">
       <button data-testid="plan-gto" className={button} onClick={()=>preset('gto')}>GTO 注入</button>
       <button data-testid="plan-equatorial" className={button} onClick={()=>preset('equatorial')}>赤道圆化</button>
       <button data-testid="plan-circular" className={button} onClick={()=>preset('circular')}>远地点圆化</button>
       <button data-testid="plan-synchronous" className={button} onClick={()=>preset('synchronous')}>同步高度修正</button>
     </div>
-    <label className="my-1 block">节点延时（秒）<input aria-label="节点延时" type="number" min="1" value={delay} onChange={(e)=>setDelay(Number(e.target.value))} className="w-20 bg-void px-1" /></label>
-    {(['prograde','radial','normal'] as const).map((key,i)=><label key={key} className="block">{['顺行','径向','法向'][i]} Δv（m/s）<input aria-label={`${['顺行','径向','法向'][i]}增量`} type="number" value={dv[key]} onChange={(e)=>setDv({...dv,[key]:Number(e.target.value)})} className="w-20 bg-void px-1" /></label>)}
-    <button className={button} onClick={()=>commit({time:snap.simTime+delay,...dv})}>按延时新建节点</button>
-    {plan && <button className={button} onClick={()=>commit({time:plan.node.time,...dv})}>更新所选节点</button>}
-    <p role="status">{notice}</p>
     {plan && <div data-testid="maneuver-status" data-burn-duration={duration} className="my-2 space-y-1">
       <p>节点倒计时：{(plan.node.time-snap.simTime).toFixed(1)} s</p>
       <p>预计满推力燃烧：{duration.toFixed(1)} s；建议点火倒计时：{(plan.node.time-snap.simTime-duration/2).toFixed(1)} s</p>
@@ -61,6 +54,20 @@ export function ManeuverPanel() {
     <p className="my-2">同步诊断：{telemetry.synchronous?.geo ? 'GEO 地球静止' : telemetry.synchronous?.gso ? 'GSO 地球同步' : '尚未同步'}；周期误差 {telemetry.synchronous?.periodError?.toFixed(1) ?? '—'} s；一天经度摆幅 {telemetry.synchronous?.longitudeSpan == null ? '—' : (telemetry.synchronous.longitudeSpan*RAD2DEG).toFixed(3)+'°'}</p>
     <button className={button} disabled={snap.vehicle.throttle>0 || snap.vehicle.fairingAttached || simRuntime.config?.vehicle.payload.kind!=='satellite' || snap.satelliteDeployedAt!=null || snap.vehicle.activeStageIndex!==(simRuntime.config?.vehicle.stages.length ?? 0)-1} data-testid="deploy-satellite" onClick={()=>simRuntime.deploySatellite()}>部署卫星</button>
     <p>{snap.satelliteDeployedAt!=null ? '卫星已部署。' : '部署后卫星无推进能力，请先完成 GEO 修正。'}</p>
+    <p role="status" className="my-1 text-data">{notice}</p>
+    <details className="my-2 border-t border-line pt-2" data-testid="maneuver-editor">
+      <summary className="cursor-pointer">自定义节点：时刻与三分量</summary>
+    <label className="my-1 block">节点延时（秒）<input aria-label="节点延时" type="number" min="1" value={delay} onChange={(e)=>setDelay(Number(e.target.value))} className="w-20 bg-void px-1" /></label>
+    {(['prograde','radial','normal'] as const).map((key,i)=><label key={key} className="block">{['顺行','径向','法向'][i]} Δv（m/s）<input aria-label={`${['顺行','径向','法向'][i]}增量`} type="number" value={dv[key]} onChange={(e)=>setDv({...dv,[key]:Number(e.target.value)})} className="w-20 bg-void px-1" /></label>)}
+    <button className={button} onClick={()=>commit({time:snap.simTime+delay,...dv})}>按延时新建节点</button>
+    {plan && <button className={button} onClick={()=>commit({time:plan.node.time,...dv})}>更新所选节点</button>}
+    </details>
+    <details className="my-2 border-t border-line pt-2">
+      <summary className="cursor-pointer">操作说明与预览的限制</summary>
+    <p>双击青色轨道选择节点位置；在下方填写增量后点击“更新所选节点”。也可用延时或快捷草案创建。紫色：点火后预览轨道；绿色：任务目标轨道（未约束的轨道面沿用当前方向）。</p>
+    <p className="my-2">节点为瞬时点火预览；实际发动机有限时长。先按预计燃烧时长的一半提前点火，再按剩余 Δv 关机，最后核对轨道。GTO 点火若剩余量接近零但远地点仍偏低，改顺行补推至远地点约35793 km。</p>
+    </details>
+    <p className="mt-2 text-data">未来一圈地面轨迹</p>
     <svg viewBox="0 0 360 180" aria-label="未来一圈地面轨迹" className="my-2 w-full border border-line bg-void" data-testid="ground-track">
       {[45,90,135].map(y=><path key={y} d={`M0 ${y}H360`} stroke="#304050" fill="none"/>)}
       {[90,180,270].map(x=><path key={x} d={`M${x} 0V180`} stroke="#304050" fill="none"/>)}

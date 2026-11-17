@@ -28,6 +28,7 @@ export function MapOverlay() {
         <p className="text-ink-faint">{phase === 'prelaunch' ? t('起飞后显示轨道。', 'Orbit shown after liftoff.') : t('飞行已结束。', 'Flight has ended.')}</p>
       ) : (
         <>
+          <ManeuverPanel />
           <ul className="flex flex-col gap-1 text-ink-dim">
             <li className="flex items-center gap-2">
               <span className="h-0.5 w-5 rounded bg-data" aria-hidden />
@@ -96,7 +97,6 @@ export function MapOverlay() {
               </dl>
             </div>
           )}
-          <ManeuverPanel />
           <p className="mt-1.5 text-[10px] leading-relaxed text-ink-faint">
             {t('轨道画在惯性空间中，地球在其中自转。预测假设不再有推力、指向模式不变（手动模式下即惯性姿态不变）。拖动旋转，滚轮缩放。', 'Orbits are drawn in inertial space; Earth rotates within it. Prediction assumes no further thrust and an unchanged pointing mode (fixed inertial attitude in manual mode). Drag to rotate; scroll to zoom.')}
           </p>

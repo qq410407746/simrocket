@@ -206,8 +206,6 @@ const openApp = async (page: Page): Promise<string[]> => {
   });
   await page.goto('/', { waitUntil: 'load' });
   await waitForRunning(page);
-  // These flight smoke tests exercise the sandbox, now a separate main-menu tab.
-  await page.getByTestId('tab-sandbox').click();
   return problems;
 };
 
