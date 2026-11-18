@@ -1,20 +1,11 @@
 import { type Page, expect, test } from '@playwright/test';
 
 const expectEnglishPage = async (page: Page) => {
-  // 阶段六、七新增界面按当前要求仅提供中文；原七个任务继续验证英文回归。
-  const content = await page.locator('body').evaluate((body) => {
-    const copy = body.cloneNode(true) as HTMLElement;
-    copy.querySelector('[data-testid="mission-geo-deployment"]')?.closest('li')?.remove();
-    copy.querySelector('[data-testid="maneuver-panel"]')?.remove();
-    copy.querySelector('[data-testid="tab-design"]')?.remove();
-    copy.querySelector('[data-testid="archive-notice"]')?.remove();
-    copy.querySelectorAll('[data-testid="archive-controls"]').forEach((element) => element.remove());
-    return copy.textContent ?? '';
-  });
+  const content = await page.locator('body').textContent() ?? '';
   // The switch keeps the native Chinese option discoverable in either language.
   expect(content.replaceAll('简体中文', '')).not.toMatch(/\p{Script=Han}/u);
   const attributes = await page.locator('[title], [aria-label]').evaluateAll((elements) =>
-    elements.filter((element) => !element.closest('[data-testid="maneuver-panel"], [data-testid="tab-design"], [data-testid="archive-controls"]')).map((element) => `${element.getAttribute('title') ?? ''} ${element.getAttribute('aria-label') ?? ''}`).join('\n'),
+    elements.map((element) => `${element.getAttribute('title') ?? ''} ${element.getAttribute('aria-label') ?? ''}`).join('\n'),
   );
   expect(attributes).not.toMatch(/\p{Script=Han}/u);
 };
@@ -41,19 +32,24 @@ test('language selector translates menus and persists across a reload', async ({
 
   await page.getByTestId('tab-logbook').click();
   await expectEnglishPage(page);
+  await page.getByTestId('tab-design').click();
+  await expect(page.getByTestId('design-workshop')).toContainText('Rocket design workshop');
+  await expect(page.getByTestId('design-performance')).toContainText('Liftoff mass');
+  await expectEnglishPage(page);
   await page.getByTestId('language-zh').click();
+  await expect(page.getByTestId('design-workshop')).toContainText('火箭设计室');
   await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN');
   await expect(page.getByTestId('tab-missions')).toHaveText('任务');
   await expect(page.getByTestId('language-zh')).toHaveAttribute('aria-pressed', 'true');
   expect(problems).toEqual([]);
 });
 
-test('all seven mission briefings and in-flight guidance are available in English', async ({ page }) => {
+test('all eight mission briefings and in-flight guidance are available in English', async ({ page }) => {
   await page.goto('/');
   await page.getByTestId('language-en').click();
   await page.getByTestId('unlock-all').check();
-  const missions = page.locator('[data-testid="mission-list"] button:not([data-testid="mission-geo-deployment"])');
-  await expect(missions).toHaveCount(7);
+  const missions = page.locator('[data-testid="mission-list"] button');
+  await expect(missions).toHaveCount(8);
   for (const mission of await missions.all()) {
     await mission.click();
     await expect(page.getByTestId('briefing-plan')).not.toBeEmpty();
@@ -108,6 +104,10 @@ test('orbital map remains functional in English and Chinese can be restored', as
   await page.getByTestId('camera-map').click();
   await expect(page.getByTestId('map-overlay')).toBeVisible();
   await expect(page.getByTestId('orbital-elements')).toBeVisible();
+  await expect(page.getByTestId('maneuver-panel')).toContainText('Advanced orbit');
+  await page.getByTestId('maneuver-panel').locator(':scope > summary').click();
+  await page.getByTestId('plan-circular').click();
+  await expect(page.getByTestId('maneuver-status')).toContainText('Time to node');
   await expectEnglishPage(page);
   await page.getByTestId('menu-button').click();
   await page.getByTestId('language-zh').click();

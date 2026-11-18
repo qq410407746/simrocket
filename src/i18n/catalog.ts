@@ -174,6 +174,35 @@ const ENGLISH_MISSIONS: Readonly<Record<string, MissionPresentation>> = {
       'Watch the inclination. Below 90° means some eastward speed remains: tap A to steer west. Above 90°, tap D instead.',
       'When periapsis is above 150 km and inclination is within 90° ± 3°, press X to shut down and hold for 10 seconds.',
     ],
+  },  'geo-deployment': {
+    title: 'Orbital Frontier: Geostationary Communications Satellite',
+    summary: 'Zenith-3: parking orbit → GTO → apoapsis circularization and inclination correction → satellite deployment.',
+    briefing: [
+      'Launch east from Kourou and deliver a communications satellite to geostationary orbit.',
+      'Use the maneuver planner on the map. A node is an instantaneous-burn preview, but a real engine needs time to burn: center the burn on the node, then correct using the orbit readouts after shutdown.',
+      'GEO requires a period close to one sidereal day, low eccentricity, low inclination, and a sub-satellite longitude that stays essentially fixed over the next sidereal day. A GSO that only matches the period is not enough.',
+      'Rocket parameters and the scoring of earlier missions are unchanged. The satellite has no engine, so finish all orbit corrections before deployment.',
+    ],
+    objectives: {
+      parking: 'Establish a parking orbit',
+      gto: 'Inject into geostationary transfer orbit',
+      geo: 'Circularize and correct to geostationary orbit',
+      deploy: 'Deploy the communications satellite',
+      confirm: 'Confirm GEO after deployment',
+    },
+    scoring: {
+      objectives: { label: 'Complete orbital mission', note: 'Complete all five steps.' },
+      period: { label: 'Period accuracy', note: 'Full marks within 10 seconds of a sidereal day.' },
+      longitude: { label: 'Ground-track stability', note: 'Full marks if the longitude drift over the next sidereal day is within 0.1°.' },
+    },
+    flightPlan: [
+      'Launch east. At about 60 m/s tilt 1°, then use prograde hold for the gravity turn; separate each stage and jettison the fairing.',
+      'On the upper stage, use pitch to control vertical speed. Shut down once periapsis reaches 150 km and wait for the parking orbit to be confirmed.',
+      'Open the map and create a GTO injection node. Point at the maneuver and ignite half the estimated burn time before the node. When the remaining Δv is near 0, check apoapsis; if it is low, burn prograde until about 35,793 km, then shut down.',
+      'Clear the old node and create an equatorial circularization node. At the equator crossing near apoapsis, change the velocity to that of an equatorial circular orbit.',
+      'After shutdown, check the synchronous diagnostics. Refine with circularization, synchronous-altitude and inclination-correction nodes as needed.',
+      'Once the GEO objective is complete, deploy the satellite and wait for post-deployment GEO confirmation.',
+    ],
   },
 };
 

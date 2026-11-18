@@ -12,6 +12,7 @@ export const DESIGN_PARTS: DesignParts = {
     mountingDiameter: vehicle.stages[vehicle.stages.length - 1]!.geometry.diameter,
   })),
 };
-export const designFromVehicle = (vehicle: VehicleDefinition, id: string): RocketDesign => ({
-  version: 1, id, name: `${vehicle.nameZh}改型`, stages: vehicle.stages.map((s) => s.id), payload: vehicle.payload.id,
+/** @param name 图纸名称；默认为"<型号>改型"（界面会按语言传入）。 */
+export const designFromVehicle = (vehicle: VehicleDefinition, id: string, name = `${vehicle.nameZh}改型`): RocketDesign => ({
+  version: 1, id, name, stages: vehicle.stages.map((s) => s.id), payload: vehicle.payload.id,
 });

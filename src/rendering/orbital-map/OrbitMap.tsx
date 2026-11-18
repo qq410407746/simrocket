@@ -137,7 +137,7 @@ export function OrbitMap() {
       apoapsis: createLabelTexture('Ap', '#5fd4ff', 'up'),
       periapsis: createLabelTexture('Pe', '#5fd4ff', 'down'),
       impact: createLabelTexture('', '#ff5d5d', 'cross'),
-      maneuver: createLabelTexture('机动', '#c4a5ff', 'up'),
+      maneuver: createLabelTexture('Δv', '#c4a5ff', 'up'),
     }),
     [],
   );

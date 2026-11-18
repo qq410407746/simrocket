@@ -20,7 +20,7 @@ const QUALITY_LABEL: Record<GraphicsQuality, readonly [string, string]> = { low:
 const TABS: readonly { readonly tab: MenuTab; readonly label: readonly [string, string]; readonly hint: readonly [string, string] }[] = [
   { tab: 'missions', label: ['任务', 'Missions'], hint: ['按顺序完成任务：每个任务规定火箭、发射场与目标，飞完给出评分', 'Complete missions in sequence, each with a vehicle, launch site, objectives and score.'] },
   { tab: 'sandbox', label: ['自由飞行', 'Free flight'], hint: ['自己选择火箭、发射场与出发点，没有目标与评分', 'Choose your vehicle, launch site and starting point. No objectives or scoring.'] },
-  { tab: 'design', label: ['火箭设计', '火箭设计'], hint: ['组装、保存与试飞自定义火箭', '组装、保存与试飞自定义火箭'] },
+  { tab: 'design', label: ['火箭设计', 'Rocket design'], hint: ['组装、保存与试飞自定义火箭', 'Assemble, save and test-fly custom rockets'] },
   { tab: 'logbook', label: ['飞行记录', 'Logbook'], hint: ['最近的飞行与成绩', 'Recent flights and results'] },
 ];
 

@@ -22,10 +22,10 @@ import { failureTitle } from './thermalLabels';
 const km = (meters: number, digits = 0): string => formatNumber(meters / 1000, digits);
 const deg = (radians: number, digits = 1): string => formatNumber(radians * RAD2DEG, digits);
 
-export const CATEGORY_LABEL: Record<MissionCategory, string> = { suborbital: '亚轨道', orbital: '近地轨道', return: '返回', advanced: '高级轨道' };
+export const CATEGORY_LABEL: Record<MissionCategory, string> = { suborbital: '亚轨道', orbital: '近地轨道', return: '返回', advanced: 'Advanced orbit' };
 
 export const categoryLabel = (category: MissionCategory, language: Language = 'zh'): string =>
-  createTranslator(language)(CATEGORY_LABEL[category], { suborbital: 'Suborbital', orbital: 'Low Earth orbit', return: 'Return', advanced: '高级轨道' }[category]);
+  createTranslator(language)(CATEGORY_LABEL[category], { suborbital: 'Suborbital', orbital: 'Low Earth orbit', return: 'Return', advanced: 'Advanced orbit' }[category]);
 
 export const OBJECTIVE_MARK: Record<ObjectiveStatus, { readonly mark: string; readonly tone: string }> = {
   pending: { mark: '○', tone: 'text-ink-dim' },
@@ -69,8 +69,8 @@ export const objectiveProgress = (
       if (orbit.apoapsisAltitude > spec.maxApoapsis) {
         parts.push(Number.isFinite(orbit.apoapsisAltitude) ? tr(`远地点 ${km(orbit.apoapsisAltitude)} km（上限 ${km(spec.maxApoapsis)}）`, `Apoapsis ${km(orbit.apoapsisAltitude)} km (max ${km(spec.maxApoapsis)})`) : tr('逃逸轨道', 'Escape trajectory'));
       }
-      if (spec.minApoapsis !== undefined) parts.push(`远地点 ${km(orbit.apoapsisAltitude)} km（目标 ${km(spec.minApoapsis)}–${km(spec.maxApoapsis)}）`);
-      if (spec.maxPeriapsis !== undefined) parts.push(`近地点上限 ${km(spec.maxPeriapsis)} km`);
+      if (spec.minApoapsis !== undefined) parts.push(tr(`远地点 ${km(orbit.apoapsisAltitude)} km（目标 ${km(spec.minApoapsis)}–${km(spec.maxApoapsis)}）`, `Apoapsis ${km(orbit.apoapsisAltitude)} km (target ${km(spec.minApoapsis)}–${km(spec.maxApoapsis)})`));
+      if (spec.maxPeriapsis !== undefined) parts.push(tr(`近地点上限 ${km(spec.maxPeriapsis)} km`, `Periapsis max ${km(spec.maxPeriapsis)} km`));
       if (spec.inclination) parts.push(tr(`倾角 ${deg(orbit.inclination)}° / ${deg(spec.inclination.target)}°`, `Inclination ${deg(orbit.inclination)}° / ${deg(spec.inclination.target)}°`));
       if (mission && mission.orbitHoldSince !== null && t && (!objectiveId || mission.orbitObjectiveId === objectiveId)) {
         const remaining = formatNumber(Math.max(0, ORBIT_CONFIRM_TIME - (t.simTime - mission.orbitHoldSince)), 0);
@@ -78,11 +78,17 @@ export const objectiveProgress = (
       }
       return parts.join(' · ');
     }
-    case 'deploy-satellite': return t?.satelliteDeployedAt != null ? '卫星已部署' : '关机并抛罩后部署卫星';
+    case 'deploy-satellite': return t?.satelliteDeployedAt != null ? tr('卫星已部署', 'Satellite deployed') : tr('关机并抛罩后部署卫星', 'Shut down and jettison the fairing, then deploy the satellite');
     case 'synchronous': {
-      const remaining = mission?.orbitHoldSince != null && t && mission.orbitObjectiveId === objectiveId
-        ? `；确认中 ${Math.max(0, ORBIT_CONFIRM_TIME - (t.simTime - mission.orbitHoldSince)).toFixed(0)} s` : '';
-      return `${spec.stationary ? 'GEO' : 'GSO'}：周期误差 ${t?.synchronous?.periodError?.toFixed(1) ?? '—'} s；经度摆幅 ${t?.synchronous?.longitudeSpan == null ? '—' : deg(t.synchronous.longitudeSpan, 3) + '°'}${remaining}`;
+      const seconds = mission?.orbitHoldSince != null && t && mission.orbitObjectiveId === objectiveId
+        ? Math.max(0, ORBIT_CONFIRM_TIME - (t.simTime - mission.orbitHoldSince)).toFixed(0) : null;
+      const kind = spec.stationary ? 'GEO' : 'GSO';
+      const period = t?.synchronous?.periodError?.toFixed(1) ?? '—';
+      const span = t?.synchronous?.longitudeSpan == null ? '—' : deg(t.synchronous.longitudeSpan, 3) + '°';
+      return tr(
+        `${kind}：周期误差 ${period} s；经度摆幅 ${span}${seconds === null ? '' : `；确认中 ${seconds} s`}`,
+        `${kind}: period error ${period} s; longitude drift ${span}${seconds === null ? '' : `; confirming ${seconds} s`}`,
+      );
     }
     case 'land-capsule': {
       const chute = t?.parachute.phase;

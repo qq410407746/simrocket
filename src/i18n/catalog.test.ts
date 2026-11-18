@@ -6,7 +6,7 @@ import { MissionStrip } from '@/components/hud/MissionStrip';
 import { MissionBriefing, MissionList } from '@/components/menu/MissionMenu';
 import { LogbookMenu } from '@/components/menu/LogbookMenu';
 import { getLaunchSiteOrDefault, launchSiteGeodetic } from '@/data/launchSites';
-import { MISSION_CATALOG as FULL_CATALOG } from '@/data/missions';
+import { MISSION_CATALOG } from '@/data/missions';
 import { getVehicleOrDefault } from '@/data/vehicles';
 import { buildLogEntry } from '@/game/missions/logbook';
 import { scoreMission } from '@/game/missions/scoring';
@@ -23,10 +23,6 @@ import { useGameStore } from '@/stores/gameStore';
 import { simRuntime } from '@/stores/simRuntime';
 import { INITIAL_SIM_STATE, useSimStore } from '@/stores/simStore';
 import { localizeMission } from './catalog';
-
-// 阶段六按用户要求只提供中文；保留既有七项任务的完整英文回归。
-const MISSION_CATALOG = FULL_CATALOG.filter((m) => m.id !== 'geo-deployment');
-const withoutChineseMission = (html: string) => html.replace(/<li><button[^>]*data-testid="mission-geo-deployment"[\s\S]*?<\/li>/, '');
 
 vi.hoisted(() => {
   const saved = new Map<string, string>();
@@ -157,7 +153,7 @@ describe('mission result presentation', () => {
       expect(score.items[0]!.label).toMatch(/\p{Script=Han}/u);
     }
     useGameStore.setState({ language: 'zh' });
-    expect(render(FlightSummary)).toContain('极地轨道');
+    expect(render(FlightSummary)).toContain('同步通信卫星');
     expect(render(FlightSummary)).toContain('最好成绩');
   });
 });
@@ -195,9 +191,8 @@ describe('flight log presentation', () => {
     ];
     useCareerStore.setState({ logbook: entries });
     const html = render(LogbookMenu);
-    // 阶段七新增回看入口按当前要求使用中文；旧日志元数据继续检查英文。
-    expect(html).toContain('查看遥测曲线');
-    expect(html.replaceAll('查看遥测曲线', '')).not.toMatch(/\p{Script=Han}/u);
+    expect(html).toContain('View telemetry curves');
+    expect(html).not.toMatch(/\p{Script=Han}/u);
     expect(html).toContain('First Orbit');
     expect(html).toContain('Crew Return');
     expect(html).toContain('Free flight');
@@ -228,10 +223,10 @@ describe('mission menu presentation', () => {
   });
 
   it('renders the complete English catalog, metadata, prerequisites and launch guidance', () => {
-    const list = withoutChineseMission(render(MissionList));
+    const list = render(MissionList);
     expect(list).toContain('Missions');
     expect(list).not.toMatch(/\p{Script=Han}/u);
-    expect(list.match(/data-testid="mission-(?:karman-line|suborbital-hop|first-orbit|crew-return|orbital-flight|inclined-orbit|polar-orbit)"/g)).toHaveLength(7);
+    expect(list.match(/data-testid="mission-(?:karman-line|suborbital-hop|first-orbit|crew-return|orbital-flight|inclined-orbit|polar-orbit|geo-deployment)"/g)).toHaveLength(8);
 
     for (const mission of MISSION_CATALOG) {
       useGameStore.setState({ selectedMissionId: mission.id });
@@ -242,6 +237,8 @@ describe('mission menu presentation', () => {
       expect(briefing).toContain('Scoring (out of 100)');
       expect(briefing).toContain('Objectives');
     }
+    expect(render(MissionBriefing)).toContain('Complete first: First Orbit');
+    useGameStore.setState({ selectedMissionId: 'polar-orbit' });
     expect(render(MissionBriefing)).toContain('Complete first: Target Inclination');
     expect(render(MissionBriefing)).toContain('Theoretical launch azimuth');
 
@@ -269,7 +266,7 @@ describe('localizeMission', () => {
     }
   });
 
-  it('completely translates all seven missions without changing any gameplay data', () => {
+  it('completely translates all eight missions without changing any gameplay data', () => {
     const original = structuredClone(MISSION_CATALOG);
     const expected = [
       ['karman-line', 'Cross the Kármán Line', 3, 2, 3, 5],
@@ -279,6 +276,7 @@ describe('localizeMission', () => {
       ['orbital-flight', 'Crewed Orbital Flight', 3, 2, 5, 4],
       ['inclined-orbit', 'Target Inclination', 4, 1, 5, 5],
       ['polar-orbit', 'Polar Orbit', 4, 1, 5, 5],
+      ['geo-deployment', 'Orbital Frontier: Geostationary Communications Satellite', 4, 5, 3, 6],
     ];
     const localized = MISSION_CATALOG.map((mission) => localizeMission(mission, 'en'));
     expect(localized.map((mission) => [
@@ -291,7 +289,7 @@ describe('localizeMission', () => {
       scoring: counts.scoring + mission.scoring.length,
       flightPlan: counts.flightPlan + mission.flightPlan.length,
     }), { missions: 0, briefing: 0, objectives: 0, scoring: 0, flightPlan: 0 })).toEqual({
-      missions: 7, briefing: 26, objectives: 10, scoring: 30, flightPlan: 34,
+      missions: 8, briefing: 30, objectives: 15, scoring: 33, flightPlan: 40,
     });
 
     localized.forEach((mission, index) => {
@@ -325,8 +323,10 @@ describe('localizeMission', () => {
   });
 });
 
-it('新增的高级轨道任务按要求保留中文，且没有改变任务定义', () => {
- const mission = FULL_CATALOG.find((m) => m.id === 'geo-deployment')!;
- expect(localizeMission(mission, 'en')).toBe(mission);
- expect(localizeMission(mission, 'zh').title).toContain('同步通信卫星');
+it('高级轨道任务也有英文文本，且没有改变任务定义', () => {
+  const mission = MISSION_CATALOG.find((m) => m.id === 'geo-deployment')!;
+  const localized = localizeMission(mission, 'en');
+  expect(localized.title).toContain('Geostationary');
+  expect(localized.objectives.map((o) => o.spec)).toEqual(mission.objectives.map((o) => o.spec));
+  expect(localizeMission(mission, 'zh')).toBe(mission);
 });

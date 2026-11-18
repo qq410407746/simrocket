@@ -5,6 +5,7 @@ import { findLaunchSite } from '@/data/launchSites';
 import { findMission } from '@/data/missions';
 import { findVehicle } from '@/data/vehicles';
 import { useI18n } from '@/i18n';
+import { uiMessageText } from '@/i18n/messages';
 import { localizeMission } from '@/i18n/catalog';
 import { useCareerStore } from '@/stores/careerStore';
 import { formatDuration, formatNumber } from '@/utils/format';
@@ -25,8 +26,8 @@ export function LogbookMenu() {
         <h2 className="text-[11px] font-semibold tracking-[0.18em] text-ink-faint">{t('飞行记录', 'Flight log')}</h2>
         <span className="readout text-[10px] text-ink-faint">{t(`${logbook.length} 条`, `${logbook.length} ${logbook.length === 1 ? 'entry' : 'entries'}`)}</span>
       </div>
-      {archiveNotice && <div data-testid="archive-notice" className={archiveError ? 'text-xs text-danger' : 'text-xs text-ink-faint'} role="status">{archiveNotice}
-        {archiveError && logbook.length === 0 && <button onClick={() => { void eraseFlightArchives(); }}>重试清除曲线</button>}
+      {archiveNotice && <div data-testid="archive-notice" className={archiveError ? 'text-xs text-danger' : 'text-xs text-ink-faint'} role="status">{uiMessageText(archiveNotice, language)}
+        {archiveError && logbook.length === 0 && <button onClick={() => { void eraseFlightArchives(); }}>{t('重试清除曲线', 'Retry clearing curves')}</button>}
       </div>}
       {logbook.length === 0 ? (
         <p className="rounded-md border border-line/60 bg-panel/40 px-3 py-4 text-center text-[12px] leading-relaxed text-ink-dim" data-testid="logbook-empty">
@@ -71,7 +72,7 @@ export function LogbookMenu() {
                   {orbit ? <span className="text-data-dim">{orbit}</span> : <span>{t('航程', 'Range')} {formatNumber(entry.downrange / 1000, 0)} km</span>}
                 </div>
                 <div data-testid="archive-controls">
-                  <button className="mt-1 rounded border border-line px-2 py-1 text-xs text-data" onClick={() => setOpened(opened === entry.id ? null : entry.id)}>{opened === entry.id ? '关闭遥测回看' : '查看遥测曲线'}</button>
+                  <button className="mt-1 rounded border border-line px-2 py-1 text-xs text-data" onClick={() => setOpened(opened === entry.id ? null : entry.id)}>{opened === entry.id ? t('关闭遥测回看', 'Close telemetry playback') : t('查看遥测曲线', 'View telemetry curves')}</button>
                   {opened === entry.id && <ArchiveViewer key={entry.id} id={entry.id} />}
                 </div>
               </li>

@@ -172,12 +172,13 @@ export const missionFlightHint = (
   if (generic?.tone === 'warn') return generic;
 
   if (mission.id === 'geo-deployment') {
+    const tr = createTranslator(language);
     const current = state.objectives.find((objective) => objective.status === 'pending')?.id;
-    if (current === 'gto') return { text: '打开地图规划 GTO 注入；按半燃烧时长提前点火，远地点约35793 km后关机，保持十秒确认。', tone: 'info' };
-    if (current === 'geo') return { text: '规划赤道圆化，在远地点附近同时升近地点并消除倾角；关机后检查周期、偏心率与星下点经度摆幅。', tone: 'info' };
-    if (current === 'deploy') return { text: 'GEO 已确认：关机，在地图机动面板点击“部署卫星”。部署后无法再修正轨道。', tone: 'info' };
-    if (current === 'confirm') return { text: '卫星已部署：关机保持十秒，检查分离冲量后的 GEO。', tone: 'info' };
-    if (t.activeStageIndex === 0 && t.attitudeMode === 'manual' && t.pitch * RAD2DEG > 88) return { text: '先竖直上升到60 m/s，再轻按 D 向东倾斜约1°，松开后用顺行保持完成重力转弯。', tone: 'info' };
+    if (current === 'gto') return { text: tr('打开地图规划 GTO 注入；按半燃烧时长提前点火，远地点约35793 km后关机，保持十秒确认。', 'Open the map and plan the GTO injection. Ignite half the burn time early, shut down at an apoapsis of about 35,793 km, and hold for ten seconds to confirm.'), tone: 'info' };
+    if (current === 'geo') return { text: tr('规划赤道圆化，在远地点附近同时升近地点并消除倾角；关机后检查周期、偏心率与星下点经度摆幅。', 'Plan the equatorial circularization: near apoapsis, raise periapsis and remove inclination in one burn. After shutdown, check the period, eccentricity and sub-satellite longitude drift.'), tone: 'info' };
+    if (current === 'deploy') return { text: tr('GEO 已确认：关机，在地图机动面板点击“部署卫星”。部署后无法再修正轨道。', 'GEO confirmed: shut down and click “Deploy satellite” in the map maneuver panel. The orbit cannot be corrected after deployment.'), tone: 'info' };
+    if (current === 'confirm') return { text: tr('卫星已部署：关机保持十秒，检查分离冲量后的 GEO。', 'Satellite deployed: keep the engine off for ten seconds and check GEO after the separation impulse.'), tone: 'info' };
+    if (t.activeStageIndex === 0 && t.attitudeMode === 'manual' && t.pitch * RAD2DEG > 88) return { text: tr('先竖直上升到60 m/s，再轻按 D 向东倾斜约1°，松开后用顺行保持完成重力转弯。', 'Climb vertically to 60 m/s, tap D to tilt about 1° east, then release and use prograde hold for the gravity turn.'), tone: 'info' };
   }
 
   const guidance = launchGuidance(mission, latitude);

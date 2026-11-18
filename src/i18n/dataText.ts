@@ -43,6 +43,21 @@ const ENGLISH: Readonly<Record<string, string>> = {
   '舱底结构（无防热）': 'Aft structure (unprotected)',
   '烧蚀防热层': 'Ablative heat shield',
   '卫星本体': 'Satellite body',
+  '自定义火箭': 'Custom rocket',
+  '由现有完整模块组成的串联火箭。理想性能不保证入轨，实际飞行受气动、热与结构限制。': 'A stacked rocket assembled from existing complete modules. Ideal performance does not guarantee orbit; real flight is limited by aerodynamics, heating and structure.',
 };
 
-export const dataText = (text: string, language: Language): string => language === 'en' ? ENGLISH[text] ?? text : text;
+/** Rocket designer module labels ("流星-S·芯级") and custom stage names ("第2级（…）"). */
+const composed = (text: string): string | null => {
+  const stage = /^第(\d+)级（(.+)）$/.exec(text);
+  if (stage) return `Stage ${stage[1]} (${translate(stage[2]!)})`;
+  if (text.includes('·')) {
+    const parts = text.split('·');
+    if (parts.every((part) => ENGLISH[part] !== undefined)) return parts.map((part) => ENGLISH[part]).join(' · ');
+  }
+  return null;
+};
+
+const translate = (text: string): string => ENGLISH[text] ?? composed(text) ?? text;
+
+export const dataText = (text: string, language: Language): string => language === 'en' ? translate(text) : text;
