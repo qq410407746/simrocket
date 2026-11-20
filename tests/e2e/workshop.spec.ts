@@ -13,9 +13,9 @@ test('设计图纸跨刷新试飞、真实耗料、曲线持久化与回看', as
   page.on('pageerror', (error) => problems.push(error.message));
   await page.goto('/');
   await page.getByTestId('tab-design').click();
-  await page.getByLabel('设计模板').selectOption('meteor-s');
+  await page.getByLabel('设计模板').selectOption('mercury-redstone');
   await page.getByLabel('火箭名称').fill('晨光试验一号');
-  await expect(page.getByTestId('design-performance')).toContainText('14.90 t');
+  await expect(page.getByTestId('design-performance')).toContainText('29.94 t');
   await page.getByTestId('save-design').click();
   await expect(page.getByRole('status')).toContainText('图纸已保存');
   const downloadPromise = page.waitForEvent('download');
@@ -38,10 +38,10 @@ test('设计图纸跨刷新试飞、真实耗料、曲线持久化与回看', as
   await expect(page.getByRole('button', { name: /晨光试验一号/ })).toHaveAttribute('aria-pressed', 'true');
   await page.getByTestId('enter-flight').click();
   await expect(page.getByTestId('vehicle-panel')).toContainText('晨光试验一号');
-  await expect.poll(() => page.evaluate(() => (window as unknown as { __orbitalFrontier: DebugApi }).__orbitalFrontier.snapshot()?.vehicle.mass)).toBe(14900);
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __orbitalFrontier: DebugApi }).__orbitalFrontier.snapshot()?.vehicle.mass).then((mass) => Math.round(mass ?? 0))).toBe(29_937);
   await page.getByTestId('stage-button').click();
   await expect.poll(() => page.evaluate(() => (window as unknown as { __orbitalFrontier: DebugApi }).__orbitalFrontier.sim().telemetry?.altitude ?? 0)).toBeGreaterThan(100);
-  expect(await page.evaluate(() => (window as unknown as { __orbitalFrontier: DebugApi }).__orbitalFrontier.snapshot()!.vehicle.mass)).toBeLessThan(14900);
+  expect(await page.evaluate(() => (window as unknown as { __orbitalFrontier: DebugApi }).__orbitalFrontier.snapshot()!.vehicle.mass)).toBeLessThan(29_937);
   await page.getByTestId('throttle-cut').click();
   await page.getByTestId('warp-5').click();
   await expect(page.getByTestId('flight-summary')).toBeVisible();
@@ -58,7 +58,10 @@ test('设计图纸跨刷新试飞、真实耗料、曲线持久化与回看', as
   const max = await slider.getAttribute('max');
   expect(Number(max)).toBeGreaterThan(Number(await slider.getAttribute('min')));
   await expect(slider).toBeEnabled();
-  await slider.fill(max!);
+  // 用键盘把滑块拖到末端（End 键）：比 fill() 写入浮点数更接近真实操作，也不受 step="any" 的取整影响
+  await slider.focus();
+  await page.keyboard.press('End');
+  await expect(slider).toHaveValue(max!);
   await expect(page.getByTestId('archive-reading')).not.toHaveText(initial!);
   await page.getByRole('button', { name: '从头回看', exact: true }).click();
   await expect(page.getByRole('button', { name: '暂停回看', exact: true })).toBeVisible();
@@ -94,14 +97,21 @@ test('设计图纸跨刷新试飞、真实耗料、曲线持久化与回看', as
 test('设计器拒绝不兼容模块、坏备份和存储失败', async ({ page }) => {
   await page.goto('/');
   await page.getByTestId('tab-design').click();
-  await page.getByLabel('有效载荷').selectOption('egret-s');
+  // 联盟号的助推器挪到芯级上面：并联助推器只能绑在原配芯级下面
+  await page.getByRole('button', { name: '第2级移向底部', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('并联助推器');
+  await expect(page.getByTestId('save-design')).toBeDisabled();
+  await page.getByLabel('设计模板').selectOption('atlas-v-401');
+  // 水星飞船（1.78 m 接口）放在半人马座（3.05 m）上：没有转接结构
+  await page.getByLabel('有效载荷').selectOption('mercury');
   await expect(page.getByRole('alert')).toContainText('接口直径不同');
   await expect(page.getByTestId('save-design')).toBeDisabled();
-  await page.getByLabel('有效载荷').selectOption('egret');
+  await page.getByLabel('有效载荷').selectOption('relay-7');
   await page.getByRole('button', { name: '添加推进级', exact: true }).click();
   await page.getByRole('button', { name: '添加推进级', exact: true }).click();
   await expect(page.getByRole('button', { name: '添加推进级', exact: true })).toBeDisabled();
-  await page.getByRole('button', { name: '第2级移向底部', exact: true }).click();
+  // 去掉芯级：只剩三个半人马座，海平面推力远小于重量
+  await page.getByRole('button', { name: '删除第1级', exact: true }).click();
   await expect(page.getByTestId('design-workshop')).toContainText('无法从发射台起飞');
   await page.getByLabel('导入图纸备份').setInputFiles({ name: '坏备份.json', mimeType: 'application/json', buffer: Buffer.from('{"version":2,"designs":[]}') });
   await expect(page.getByRole('status')).toContainText('备份无效');

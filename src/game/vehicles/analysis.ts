@@ -67,15 +67,50 @@ export const capsuleSideAngle = (capsule: { readonly geometry: { readonly diamet
     (CAPSULE_PROFILE.topHeight - CAPSULE_PROFILE.shoulderHeight) * capsule.geometry.length,
   );
 
+/** 是否为并联助推器组（与上面一级同时工作，底面与它齐平，不增加总高度）。 */
+export const isParallel = (stage: StageDefinition | undefined): boolean => (stage?.parallel?.count ?? 0) > 0;
+
+/** 一级在纵向上占的高度 [m]：串联级为其长度；并联助推器组绑在芯级旁边，不占高度。 */
+export const stackLength = (stage: StageDefinition): number => (isParallel(stage) ? 0 : stage.geometry.length);
+
 /** 飞行器总高度 [m]。 */
 export const vehicleHeight = (vehicle: VehicleDefinition): number =>
-  vehicle.stages.reduce((sum, s) => sum + s.geometry.length, 0) + payloadStackHeight(vehicle.payload);
+  vehicle.stages.reduce((sum, s) => sum + stackLength(s), 0) + payloadStackHeight(vehicle.payload);
 
 /** 飞行器最大直径 [m]。 */
 export const vehicleMaxDiameter = (vehicle: VehicleDefinition): number => {
   const p = vehicle.payload;
   const payloadDiameter = p.kind === 'satellite' ? p.fairing.geometry.diameter : p.geometry.diameter;
-  return Math.max(payloadDiameter, ...vehicle.stages.map((s) => s.geometry.diameter));
+  return Math.max(payloadDiameter, ...vehicle.stages.map((s, i) => {
+    if (!isParallel(s)) return s.geometry.diameter;
+    // 助推器绕芯级一圈：外缘到轴线的距离 = 芯级半径 + 助推器直径
+    const core = vehicle.stages[i + 1];
+    return (core ? core.geometry.diameter : 0) + 2 * s.geometry.diameter;
+  }));
+};
+
+/**
+ * 并联段（助推器组 + 芯级同时工作，直到其中一个烧完）的满推力燃烧结果。
+ * 返回这一段的燃烧时间、两者各自消耗的推进剂、合成的真空比冲与推力。
+ */
+export const parallelPhase = (booster: StageDefinition, core: StageDefinition, boosterPropellant: number, corePropellant: number) => {
+  const flowB = stageMassFlow(booster);
+  const flowC = stageMassFlow(core);
+  const tB = flowB > 0 ? boosterPropellant / flowB : Infinity;
+  const tC = flowC > 0 ? corePropellant / flowC : Infinity;
+  const time = Math.min(tB, tC);
+  const burnedB = Number.isFinite(time) ? Math.min(boosterPropellant, flowB * time) : 0;
+  const burnedC = Number.isFinite(time) ? Math.min(corePropellant, flowC * time) : 0;
+  const thrustVacuum = stageThrust(booster, 0) + stageThrust(core, 0);
+  const flow = flowB + flowC;
+  return {
+    time: Number.isFinite(time) ? time : 0,
+    burnedBooster: burnedB,
+    burnedCore: burnedC,
+    thrustVacuum,
+    thrustSeaLevel: stageThrust(booster, SEA_LEVEL.PRESSURE) + stageThrust(core, SEA_LEVEL.PRESSURE),
+    ispVacuum: flow > 0 ? thrustVacuum / (flow * STANDARD_GRAVITY) : 0,
+  };
 };
 
 export interface StagePerformance {
@@ -127,10 +162,37 @@ export const analyzeVehicle = (vehicle: VehicleDefinition): VehiclePerformance =
 
   const perStage: StagePerformance[] = [];
   let massAbove = total;
+  /** 并联段里芯级已经烧掉的推进剂 [kg]。 */
+  let preburned = 0;
   stages.forEach((stage, i) => {
-    // 第一级携带整流罩；第二级点火前整流罩已分离。
-    const ignitionMass = massAbove - (i === 1 ? fairingMass : 0);
-    const burnoutMass = ignitionMass - stage.propellantMass;
+    const core = stages[i + 1];
+    if (isParallel(stage) && core) {
+      // 助推器组：与芯级一起烧到助推器耗尽（Δv 按合成比冲计算），然后抛掉助推器
+      const phase = parallelPhase(stage, core, stage.propellantMass, core.propellantMass);
+      const burnoutMass = massAbove - phase.burnedBooster - phase.burnedCore;
+      perStage.push({
+        stageId: stage.id,
+        stageName: stage.name,
+        ignitionMass: massAbove,
+        burnoutMass,
+        thrustVacuum: phase.thrustVacuum,
+        thrustSeaLevel: phase.thrustSeaLevel,
+        ispVacuum: phase.ispVacuum,
+        ispSeaLevel: (phase.thrustSeaLevel / phase.thrustVacuum) * phase.ispVacuum,
+        burnTime: phase.time,
+        deltaVVacuum: idealDeltaV(phase.ispVacuum, massAbove, burnoutMass),
+        twrVacuumAtIgnition: phase.thrustVacuum / (massAbove * STANDARD_GRAVITY),
+      });
+      preburned = phase.burnedCore;
+      massAbove = burnoutMass - stage.dryMass - (stage.propellantMass - phase.burnedBooster);
+      return;
+    }
+    // 第一级（串联）携带整流罩；第二级点火前整流罩已分离。
+    const serialIndex = stages.slice(0, i).filter((s) => !isParallel(s)).length;
+    const ignitionMass = massAbove - (serialIndex === 1 ? fairingMass : 0);
+    const propellant = stage.propellantMass - preburned;
+    preburned = 0;
+    const burnoutMass = ignitionMass - propellant;
     const thrustVacuum = stageThrust(stage, 0);
     perStage.push({
       stageId: stage.id,
@@ -141,11 +203,11 @@ export const analyzeVehicle = (vehicle: VehicleDefinition): VehiclePerformance =
       thrustSeaLevel: stageThrust(stage, SEA_LEVEL.PRESSURE),
       ispVacuum: stage.engine.ispVacuum,
       ispSeaLevel: engineIsp(stage.engine, SEA_LEVEL.PRESSURE),
-      burnTime: stageBurnTime(stage),
+      burnTime: stageMassFlow(stage) > 0 ? propellant / stageMassFlow(stage) : 0,
       deltaVVacuum: idealDeltaV(stage.engine.ispVacuum, ignitionMass, burnoutMass),
       twrVacuumAtIgnition: thrustVacuum / (ignitionMass * STANDARD_GRAVITY),
     });
-    massAbove = ignitionMass - stageWetMass(stage);
+    massAbove = burnoutMass - stage.dryMass;
   });
 
   const payloadDeltaV = payload.engine
@@ -206,7 +268,8 @@ export const computeMassProperties = (vehicle: VehicleDefinition, input: MassPro
     const fill = stage.propellantMass > 0 ? propellant / stage.propellantMass : 0;
     mass += stage.dryMass + propellant;
     moment += stage.dryMass * (base + len / 2) + propellant * (base + (fill * len) / 2);
-    base += len;
+    // 并联助推器与芯级底面齐平：不抬高上面各部件的基准
+    base += stackLength(stage);
   });
 
   const { payload } = vehicle;

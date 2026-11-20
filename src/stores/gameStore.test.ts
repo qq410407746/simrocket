@@ -39,8 +39,8 @@ describe('language preference', () => {
   });
 
   it.each([{}, { language: 'fr' }, { language: null }])('preserves v1 saves with absent or unsupported language: %j', async (saved) => {
-    stored.set('orbital-frontier/game', JSON.stringify({ version: 1, state: { ...saved, vehicleId: 'meteor-s', quality: 'low' } }));
+    stored.set('orbital-frontier/game', JSON.stringify({ version: 1, state: { ...saved, vehicleId: 'mercury-redstone', quality: 'low' } }));
     const { useGameStore } = await import('./gameStore');
-    expect(useGameStore.getState()).toMatchObject({ language: 'zh', vehicleId: 'meteor-s', quality: 'low' });
+    expect(useGameStore.getState()).toMatchObject({ language: 'zh', vehicleId: 'mercury-redstone', quality: 'low' });
   });
 });

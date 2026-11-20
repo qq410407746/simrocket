@@ -30,7 +30,7 @@ const isAttached = (section: RocketSection, snapshot: SimSnapshot): boolean => {
 
 const findDebris = (section: RocketSection, debris: readonly DebrisState[]): DebrisState | undefined =>
   section.kind === 'stage'
-    ? debris.find((d) => d.kind === 'stage' && d.stageIndex === section.stageIndex)
+    ? debris.find((d) => d.kind === 'stage' && d.stageIndex === section.stageIndex && d.unit === section.unit)
     : section.kind === 'fairing'
       ? debris.find((d) => d.kind === 'fairing' && d.half === section.half)
       : section.kind === 'heat-shield'
@@ -76,7 +76,7 @@ export function VehicleAssembly({ vehicle }: { vehicle: VehicleDefinition }) {
         o.visible = snapshot.vehicle.phase !== 'destroyed';
         eciToRenderRelative(frameState.vehiclePosition, frameState.cameraPosition, o.position);
         eciOrientationToRender(frameState.vehicleAttitude, o.quaternion).multiply(MODEL_TO_BODY);
-        n.position.set(0, section.baseY - base - frameState.centerOfMassHeight, 0);
+        n.position.set(section.offsetX, section.baseY - base - frameState.centerOfMassHeight, section.offsetZ);
         return;
       }
       const debris = findDebris(section, frameState.debris);
@@ -89,9 +89,11 @@ export function VehicleAssembly({ vehicle }: { vehicle: VehicleDefinition }) {
       eciOrientationToRender(debris.attitude, o.quaternion).multiply(MODEL_TO_BODY);
       // 分离体的参考点：箭体为其质心，整流罩半罩与防热大底为轴线上的几何中心。
       const stage = vehicle.stages[section.stageIndex];
+      // 并联助推器的分离体是单个助推器：残余推进剂按整组折算后再求质心高度
+      const units = stage?.parallel?.count ?? 1;
       const pivot =
         section.kind === 'stage' && stage
-          ? stageAloneMassProperties(stage, debris.propellantMass).centerOfMassHeight
+          ? stageAloneMassProperties(stage, debris.propellantMass * units).centerOfMassHeight
           : section.length / 2;
       n.position.set(0, -pivot, 0);
     });
@@ -123,9 +125,10 @@ export function VehicleAssembly({ vehicle }: { vehicle: VehicleDefinition }) {
                   if (!snapshot || snapshot.vehicle.phase === 'destroyed') return null;
                   const propulsion = activePropulsion(vehicle, snapshot.vehicle);
                   if (!propulsion) return null;
+                  // 并联构型里助推器与芯级同时工作：各自还有推进剂才有尾焰
                   const mine =
                     section.kind === 'stage'
-                      ? propulsion.source === 'stage' && propulsion.stageIndex === section.stageIndex
+                      ? propulsion.source === 'stage' && propulsion.units.some((u) => u.stageIndex === section.stageIndex && u.propellantMass > 0)
                       : propulsion.source === 'payload';
                   if (!mine) return null;
                   const rated = propulsion.engine.thrustVacuum * propulsion.engineCount;

@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { getLaunchSiteOrDefault, launchSiteGeodetic } from '@/data/launchSites';
 import { MISSION_CATALOG } from '@/data/missions';
 import { getVehicleOrDefault } from '@/data/vehicles';
-import { headingOfCombo, launchGuidance } from '@/game/missions/guidance';
+import { fineKickKeys, headingOfCombo, launchGuidance } from '@/game/missions/guidance';
 import { type MissionPilot, type PilotFactory, flyMission } from '@/game/missions/testing/flyMission';
 import { createMissionState, missionOrbitRequirement } from '@/game/missions/tracker';
 import type { MissionDefinition, MissionState } from '@/game/missions/types';
@@ -14,7 +14,7 @@ import { DEG2RAD } from '@/game/physics/constants';
 import { Simulation } from '@/game/simulation/Simulation';
 import { buildSnapshot } from '@/game/simulation/snapshot';
 import { createFlightConfig } from '@/game/simulation/startConditions';
-import { HandFlownPilot } from '@/game/simulation/testing/handFlownPilot';
+import { type HandFlownOptions, HandFlownPilot } from '@/game/simulation/testing/handFlownPilot';
 import { ReturnPilot, SuborbitalPilot } from '@/game/simulation/testing/missionPilots';
 import type { OrbitTelemetry, Telemetry } from '@/game/telemetry/telemetry';
 import { deriveTelemetry } from '@/game/telemetry/telemetry';
@@ -48,16 +48,20 @@ const expectInOrder = (hints: readonly string[], expected: readonly string[]): v
   }
 };
 
-const orbitalPilot = (id: string, kickAngleDeg: number, back: ConstructorParameters<typeof ReturnPilot>[2] | null = null): PilotFactory => {
+const orbitalPilot = (id: string, extra: Partial<HandFlownOptions> = {}, back: ConstructorParameters<typeof ReturnPilot>[2] | null = null): PilotFactory => {
   const mission = missionOf(id);
   const guidance = launchGuidance(mission, siteOf(mission).latitude);
   const target = missionOrbitRequirement(mission)?.inclination?.target;
   return (sim, config): MissionPilot => {
     const ascent = new HandFlownPilot(sim, config, {
       targetAltitude: 200_000,
-      kickAngleDeg,
+      kickAngleDeg: 2.5,
+      pitchStepDeg: 2,
+      decisionInterval: 2,
       kickHeadingDeg: headingOfCombo(guidance.lower),
+      kickAzimuthDeg: fineKickKeys(guidance.azimuthDeg) ? guidance.azimuthDeg : undefined,
       inclination: target !== undefined ? { target, increase: guidance.direction === 'ascending' ? 'left' : 'right' } : undefined,
+      ...extra,
     });
     const descent = back ? new ReturnPilot(sim, config, back) : null;
     let inOrbit = false;
@@ -112,9 +116,14 @@ describe('English mission ascent hints', () => {
     expect(text).not.toMatch(/\p{Script=Han}/u);
   });
 
-  it.each(['inclined-orbit', 'polar-orbit'])('translates the standard launch turn for %s', (id) => {
-    const text = hint(base, missionOf(id))?.text;
-    expect(text).toContain('heading');
+  it.each([
+    // 拜科努尔飞 51.6°：方位角 062°，离八个键盘方向都远，提示"按住 D、间断点按 W"
+    ['inclined-orbit', 'tapping W'],
+    // 宇宙神 V 推重比低：100 m/s 时向南轻轻倾斜
+    ['polar-orbit', 'tilt south'],
+  ])('translates the launch turn for %s', (id, expected) => {
+    const text = hint({ ...base, surfaceSpeed: id === 'polar-orbit' ? 120 : 70 }, missionOf(id))?.text;
+    expect(text).toContain(expected);
     expect(text).not.toMatch(/\p{Script=Han}/u);
   });
 
@@ -141,16 +150,16 @@ describe('English mission orbit hints', () => {
   const base: Telemetry = {
     ...raw, orbit, simTime: 100, missionTime: 100, altitude: 80_000, activeStageIndex: 1, thrust: 100,
     ignited: true, throttle: 1, verticalSpeed: 100, thermal: [], dynamicPressure: 0, bendingLoad: 0,
-    referenceHeatFlux: 0, stagePropellant: [0, 10], attitudeMode: 'manual',
+    referenceHeatFlux: 0, stagePropellant: [0, 10, 10, 10], attitudeMode: 'manual',
   };
   const cases: [string, Partial<OrbitTelemetry>, Partial<Telemetry>, string, Partial<MissionState>?][] = [
     ['orbit achieved', {}, {}, 'requirements met'],
     ['periapsis below minimum', { periapsisAltitude: 140_000 }, {}, '150 km'],
-    ['periapsis and plane error', { periapsisAltitude: 140_000, inclination: 47 * DEG2RAD }, {}, 'W + A'],
+    ['periapsis and plane error', { periapsisAltitude: 140_000, inclination: 47 * DEG2RAD }, {}, 'tap W'],
     ['apoapsis above maximum', { apoapsisAltitude: 900_000 }, {}, '900 km'],
-    ['increase inclination', { inclination: 47 * DEG2RAD }, {}, 'W + A'],
-    ['decrease inclination', { inclination: 56 * DEG2RAD }, {}, 'S + D'],
-    ['non-east controls manual', { classification: 'suborbital', periapsisAltitude: -200_000 }, {}, 'W + D'],
+    ['increase inclination', { inclination: 47 * DEG2RAD }, {}, 'tap W'],
+    ['decrease inclination', { inclination: 56 * DEG2RAD }, {}, 'tap S'],
+    ['upper-stage pitch control', { classification: 'suborbital', periapsisAltitude: -200_000 }, {}, 'Use pitch'],
     ['non-east controls automatic', { classification: 'atmospheric', periapsisAltitude: 20_000 }, { attitudeMode: 'prograde' }, 'Press R'],
     ['orbit confirmation', {}, { thrust: 0 }, '6 s', { orbitHoldSince: 96 }],
     ['coasting low periapsis', { periapsisAltitude: 120_000 }, { thrust: 0 }, 'prograde hold (R)'],
@@ -179,16 +188,16 @@ describe('English mission return hints', () => {
   const base: Telemetry = {
     ...raw, missionTime: 100, altitude: 200_000, thrust: 0, throttle: 1, ignited: false,
     thermal: [], bendingLoad: 0, dynamicPressure: 0, referenceHeatFlux: 0, attitudeMode: 'retrograde',
-    stagePropellant: [0, 10],
+    stagePropellant: [0, 0, 0, 10],
   };
   const cases: [string, Partial<Telemetry>, string][] = [
     ['turn around', { attitudeMode: 'manual' }, 'Press T'],
-    ['start stage engine', {}, 'Stage 2'],
+    ['start stage engine', {}, 'Service and orbital modules'],
     ['start spacecraft engine', { activeStageIndex: vehicle.stages.length }, 'spacecraft engine'],
     ['resume burn', { ignited: true }, 'press Z'],
     ['deorbit burn', { thrust: 100 }, 'Deorbit burn'],
     ['excessive burn', { thrust: 100, orbit: { ...raw.orbit!, periapsisAltitude: -400_000 } }, 'too steep'],
-    ['shutdown and separate', { thrust: 100, orbit: { ...raw.orbit!, periapsisAltitude: 40_000 } }, 'separate Stage 2'],
+    ['shutdown and separate', { thrust: 100, orbit: { ...raw.orbit!, periapsisAltitude: 40_000 } }, 'separate Service and orbital modules'],
     ['missing propulsion stage', { thrust: 100, activeStageIndex: vehicle.stages.length, orbit: { ...raw.orbit!, periapsisAltitude: 40_000 } }, 'propulsion stage'],
   ];
   it.each(cases)('translates %s without Han text', (_name, changes, expected) => {
@@ -203,7 +212,7 @@ describe('English mission return hints', () => {
   it('reminds a detached suborbital capsule to hold retrograde in English', () => {
     const task = missionOf('suborbital-hop');
     const telemetry: Telemetry = {
-      ...base, activeStageIndex: vehicle.stages.length, stageAttached: [false, false],
+      ...base, activeStageIndex: vehicle.stages.length, stageAttached: vehicle.stages.map(() => false),
       orbit: null, attitudeMode: 'manual', parachute: { phase: 'stowed', dragArea: 0 },
     };
     const text = missionFlightHint(telemetry, vehicle, task, createMissionState(task), site.latitude, 'en')?.text;
@@ -287,11 +296,12 @@ describe('任务提示：亚轨道任务', () => {
 
 describe('任务提示：入轨', () => {
   it('首次入轨（向东）：沿用通用的上升提示；关机后提示轨道确认中', () => {
-    const { hints, status } = hintsDuring('first-orbit', orbitalPilot('first-orbit', 2.5), 1_500);
+    const { hints, status } = hintsDuring('first-orbit', orbitalPilot('first-orbit', { kickAngleDeg: 3 }), 1_500);
     expect(status).toBe('success');
     expectInOrder(hints, [
       '速度达到约 # m/s 后，按住 D 向东倾斜 #–#°',
-      '一级推进剂耗尽：按 空格 分离',
+      '助推器（B/V/G/D）已烧完：按 空格 抛掉，芯级继续工作',
+      '芯级（A）推进剂耗尽：按 空格 分离',
       '用俯仰角控制垂直速度',
       '轨道确认中：保持关机，还需 # 秒',
     ]);
@@ -300,22 +310,22 @@ describe('任务提示：入轨', () => {
     expect(hints.some((h) => /近地点 # km：升到 # km 再关机/.test(h))).toBe(true);
   });
 
-  it('指定倾角轨道：起飞提示 W + D 向东北；上面级飞行中提示用 W + A 修正倾角', () => {
-    const { hints, status } = hintsDuring('inclined-orbit', orbitalPilot('inclined-orbit', 2.5), 1_500);
+  it('指定倾角轨道：起飞提示按住 D、间断点按 W 对准 062°；上面级飞行中提示用 W / S 修正倾角', () => {
+    const { hints, status } = hintsDuring('inclined-orbit', orbitalPilot('inclined-orbit'), 1_500);
     expect(status).toBe('success');
     expectInOrder(hints, [
-      '速度达到约 # m/s 后，按住 W + D 向东北倾斜约 #°（俯仰读数 #°，航向约 #°）',
-      '一级推进剂耗尽：按 空格 分离',
-      '倾角 #°，目标 #°：点按 W + A 修正航向',
+      '速度达到约 # m/s 后，按住 D 倾斜的同时间断地点按 W（大约一半的时间），倾斜约 #° 时航向读数应在 #° 附近',
+      '助推器（B/V/G/D）已烧完',
+      '倾角 #°，目标 #°：点按',
       '轨道确认中',
     ]);
     expect(hints.some((h) => h.includes('按住 D 向东倾斜'))).toBe(false);
   });
 
   it('极地轨道：起飞提示 S 向南；倾角不到 90° 时提示用 A 把航向压向西', () => {
-    const { hints, status } = hintsDuring('polar-orbit', orbitalPilot('polar-orbit', 2.5), 1_500);
+    const { hints, status } = hintsDuring('polar-orbit', orbitalPilot('polar-orbit', { kickSpeed: 100, kickAngleDeg: 1.5, maxGLoad: 5 }), 1_500);
     expect(status).toBe('success');
-    expectInOrder(hints, ['速度达到约 # m/s 后，按住 S 向南倾斜约 #°', '倾角 #°，目标 #°：点按 A 修正航向', '轨道确认中']);
+    expectInOrder(hints, ['先保持竖直：速度到 # m/s 再倾斜', '按住 S 向南倾斜 #–#°', '过载 # g：按 ↓ 收小节流', '倾角 #°，目标 #°：点按 A 修正航向', '轨道确认中']);
   });
 
   it('入轨后轨道不符合要求：分别说明近地点太低、远地点太高、倾角不对', () => {
@@ -351,9 +361,9 @@ describe('任务提示：返回', () => {
     const { hints, status } = hintsDuring('crew-return', (sim, config) => new ReturnPilot(sim, config, { entry: 'trim', jettisonShield: true }));
     expect(status).toBe('success');
     expectInOrder(hints, [
-      '逆行保持中：箭体调头后按 空格 启动二级发动机，再按 Z 点火',
+      '逆行保持中：箭体调头后按 空格 启动服务舱与轨道舱发动机，再按 Z 点火',
       '离轨点火中：近地点 # km，降到 #–# km 后按 X 关机',
-      '近地点 # km：按 X 关机，然后按 空格 分离二级',
+      '近地点 # km：按 X 关机，然后按 空格 分离服务舱与轨道舱',
       '即将再入大气层：配平再入',
       '再入中：配平再入',
       '已降到亚声速',
@@ -371,7 +381,7 @@ describe('任务提示：返回', () => {
     const sim = new Simulation(config);
     sim.step();
     const telemetry = deriveTelemetry(buildSnapshot(sim, { seq: 0, timeWarp: 1, paused: false, simRate: 1 }), config);
-    expect(flightHint(telemetry, vehicle)?.text).toMatch(/^已在轨道上。按 空格 启动二级发动机/);
+    expect(flightHint(telemetry, vehicle)?.text).toMatch(/^已在轨道上。按 空格 启动服务舱与轨道舱发动机/);
     expect(missionFlightHint(telemetry, vehicle, mission, createMissionState(mission), site.latitude)).toEqual({
       text: '任务：返回地球。按 T 开启逆行保持，等箭体调头（可以用 . 加快时间）',
       tone: 'info',
@@ -384,7 +394,7 @@ describe('任务提示：返回', () => {
   });
 
   it('载人轨道飞行：轨道确认之后提示返回', () => {
-    const { hints, status } = hintsDuring('orbital-flight', orbitalPilot('orbital-flight', 2.5, { entry: 'trim' }));
+    const { hints, status } = hintsDuring('orbital-flight', orbitalPilot('orbital-flight', {}, { entry: 'trim' }));
     expect(status).toBe('success');
     expectInOrder(hints, ['用俯仰角控制垂直速度', '轨道确认中', '任务：返回地球。按 T 开启逆行保持', '离轨点火中', '已降到亚声速']);
   }, fullFlightTimeout);
@@ -404,9 +414,9 @@ describe('任务界面的文字', () => {
     );
     expect(objectiveProgress({ kind: 'reach-altitude', altitude: 100_000 }, 'done', telemetry, sim.flightStats, null)).toBe('');
     // 入轨目标：近地点、倾角；远地点超限时才显示
-    expect(objectiveProgress(orbitSpec, 'pending', telemetry, sim.flightStats, null)).toBe('近地点 200 / 150 km · 倾角 28.5° / 51.6°');
+    expect(objectiveProgress(orbitSpec, 'pending', telemetry, sim.flightStats, null)).toBe('近地点 200 / 150 km · 倾角 46.0° / 51.6°');
     const high = { ...telemetry, orbit: { ...(telemetry.orbit as OrbitTelemetry), apoapsisAltitude: 812_000 } };
-    expect(objectiveProgress(orbitSpec, 'pending', high, sim.flightStats, null)).toBe('近地点 200 / 150 km · 远地点 812 km（上限 600） · 倾角 28.5° / 51.6°');
+    expect(objectiveProgress(orbitSpec, 'pending', high, sim.flightStats, null)).toBe('近地点 200 / 150 km · 远地点 812 km（上限 600） · 倾角 46.0° / 51.6°');
     const holding = { ...createMissionState(mission), orbitHoldSince: telemetry.simTime - 3 };
     expect(objectiveProgress(orbitSpec, 'pending', telemetry, sim.flightStats, holding)).toContain('确认中 7 s');
     expect(objectiveProgress(orbitSpec, 'pending', { ...telemetry, orbit: null }, sim.flightStats, null)).toBe('近地点 ≥ 150 km');

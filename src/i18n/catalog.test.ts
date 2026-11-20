@@ -50,13 +50,13 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-const orbitConfig = createFlightConfig(getVehicleOrDefault('frontier-1'), launchSiteGeodetic(getLaunchSiteOrDefault('cape-canaveral')), 'orbit');
+const orbitConfig = createFlightConfig(getVehicleOrDefault('soyuz-2-1a'), launchSiteGeodetic(getLaunchSiteOrDefault('baikonur')), 'orbit');
 const simulation = new Simulation(orbitConfig);
 const telemetry = deriveTelemetry(buildSnapshot(simulation, { seq: 0, timeWarp: 1, paused: false, simRate: 1 }), orbitConfig);
 const stats = simulation.flightStats;
 const baseLog = buildLogEntry({
   id: 'test-flight', date: '2026-11-14T12:00:00.000Z', missionId: 'first-orbit',
-  vehicleId: 'frontier-1', siteId: 'cape-canaveral', start: 'orbit', telemetry, stats,
+  vehicleId: 'soyuz-2-1a', siteId: 'baikonur', start: 'orbit', telemetry, stats,
   outcome: null, mission: null, score: null,
 });
 
@@ -196,14 +196,14 @@ describe('flight log presentation', () => {
     expect(html).toContain('First Orbit');
     expect(html).toContain('Crew Return');
     expect(html).toContain('Free flight');
-    expect(html).toContain('Frontier-1');
-    expect(html).toContain('Cape Canaveral');
+    expect(html).toContain('Soyuz-2.1a');
+    expect(html).toContain('Baikonur');
     expect(html).toContain('Clear mission progress and flight log');
     expect(html.match(/data-testid="logbook-entry"/g)).toHaveLength(entries.length);
     expect(useCareerStore.getState().logbook).toBe(entries);
     useGameStore.setState({ language: 'zh' });
     expect(render(LogbookMenu)).toContain('载人飞船返回');
-    expect(render(LogbookMenu)).toContain('卡纳维拉尔角');
+    expect(render(LogbookMenu)).toContain('拜科努尔');
   });
 });
 
@@ -243,7 +243,7 @@ describe('mission menu presentation', () => {
     expect(render(MissionBriefing)).toContain('Theoretical launch azimuth');
 
     useGameStore.setState({ language: 'zh', selectedMissionId: 'karman-line' });
-    expect(render(MissionList)).toContain('流星-S');
+    expect(render(MissionList)).toContain('水星-红石');
     expect(render(MissionBriefing)).toContain('突破卡门线');
     expect(render(MissionBriefing)).toContain('附加目标');
   });
@@ -271,7 +271,7 @@ describe('localizeMission', () => {
     const expected = [
       ['karman-line', 'Cross the Kármán Line', 3, 2, 3, 5],
       ['suborbital-hop', 'Suborbital Flight and Recovery', 4, 2, 4, 5],
-      ['first-orbit', 'First Orbit', 4, 1, 4, 5],
+      ['first-orbit', 'First Orbit', 4, 1, 3, 5],
       ['crew-return', 'Crew Return', 4, 1, 4, 5],
       ['orbital-flight', 'Crewed Orbital Flight', 3, 2, 5, 4],
       ['inclined-orbit', 'Target Inclination', 4, 1, 5, 5],
@@ -289,7 +289,7 @@ describe('localizeMission', () => {
       scoring: counts.scoring + mission.scoring.length,
       flightPlan: counts.flightPlan + mission.flightPlan.length,
     }), { missions: 0, briefing: 0, objectives: 0, scoring: 0, flightPlan: 0 })).toEqual({
-      missions: 8, briefing: 30, objectives: 15, scoring: 33, flightPlan: 40,
+      missions: 8, briefing: 30, objectives: 15, scoring: 32, flightPlan: 40,
     });
 
     localized.forEach((mission, index) => {

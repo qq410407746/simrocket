@@ -2,7 +2,7 @@ import { getLaunchSiteOrDefault } from '@/data/launchSites';
 import { MISSION_CATALOG, findMission } from '@/data/missions';
 import { getVehicleOrDefault } from '@/data/vehicles';
 import { completedCount, isMissionUnlocked, progressOf } from '@/game/missions/career';
-import { comboLabel, launchGuidance } from '@/game/missions/guidance';
+import { comboLabel, fineKickKeys, launchGuidance } from '@/game/missions/guidance';
 import type { MissionDefinition } from '@/game/missions/types';
 import { DEG2RAD } from '@/game/physics/constants';
 import { ORBIT_START_ALTITUDE } from '@/game/simulation/startConditions';
@@ -87,10 +87,21 @@ function LaunchNote({ mission }: { mission: MissionDefinition }) {
   if (!mission.launch) return null;
   const site = getLaunchSiteOrDefault(mission.siteId);
   const guidance = launchGuidance(mission, site.latitudeDeg * DEG2RAD);
+  // 方位角离八个键盘方向都远时（拜科努尔飞 51.6°）：按住一个键、间断点按另一个键
+  const fine = fineKickKeys(guidance.azimuthDeg);
   return (
     <p className="rounded border border-line/70 bg-void/40 px-2 py-1 text-[11px] leading-relaxed text-ink-dim" data-testid="launch-note">
-      {t('理论发射方位角', 'Theoretical launch azimuth')} <span className="readout text-data">{padDegrees(guidance.azimuthDeg)}°</span>{t('（已扣除地球自转）。起飞倾斜按', ' (Earth’s rotation accounted for). Initial tilt:')}{' '}
-      <kbd className="readout rounded-sm border border-line bg-raised px-1 text-ink">{comboLabel(guidance.lower)}</kbd>{t(`（航向 ${padDegrees(guidance.keyHeadingDeg)}°）；飞行中增大倾角按`, ` (heading ${padDegrees(guidance.keyHeadingDeg)}°); during flight, increase inclination with`)}{' '}
+      {t('理论发射方位角', 'Theoretical launch azimuth')} <span className="readout text-data">{padDegrees(guidance.azimuthDeg)}°</span>{fine ? t('（已扣除地球自转）。起飞倾斜按住', ' (Earth’s rotation accounted for). Initial tilt: hold') : t('（已扣除地球自转）。起飞倾斜按', ' (Earth’s rotation accounted for). Initial tilt:')}{' '}
+      {fine ? (
+        <>
+          <kbd className="readout rounded-sm border border-line bg-raised px-1 text-ink">{fine.hold}</kbd>{t('、间断点按', ' while tapping')}{' '}
+          <kbd className="readout rounded-sm border border-line bg-raised px-1 text-ink">{fine.tap}</kbd>{t(`，让航向读数停在 ${padDegrees(guidance.azimuthDeg)}° 附近；飞行中增大倾角按`, ` so the heading settles near ${padDegrees(guidance.azimuthDeg)}°; during flight, increase inclination with`)}{' '}
+        </>
+      ) : (
+        <>
+          <kbd className="readout rounded-sm border border-line bg-raised px-1 text-ink">{comboLabel(guidance.lower)}</kbd>{t(`（航向 ${padDegrees(guidance.keyHeadingDeg)}°）；飞行中增大倾角按`, ` (heading ${padDegrees(guidance.keyHeadingDeg)}°); during flight, increase inclination with`)}{' '}
+        </>
+      )}
       <kbd className="readout rounded-sm border border-line bg-raised px-1 text-ink">{comboLabel(guidance.increaseInclination)}</kbd>{t('，减小按', ', decrease with')}{' '}
       <kbd className="readout rounded-sm border border-line bg-raised px-1 text-ink">{comboLabel(guidance.decreaseInclination)}</kbd>{t('。', '.')}
     </p>

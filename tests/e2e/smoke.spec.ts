@@ -257,7 +257,7 @@ test.describe('Orbital Frontier 冒烟测试', () => {
 
     const state = await expectAllFinite(page);
     const t = state.sim.telemetry!;
-    // 默认：边疆一号 @ 卡纳维拉尔角
+    // 默认：联盟-2.1a @ 卡纳维拉尔角
     expect(t.altitude).toBeGreaterThan(10);
     expect(t.altitude).toBeLessThan(60);
     expect(t.surfaceSpeed).toBeLessThan(1e-6);
@@ -267,7 +267,7 @@ test.describe('Orbital Frontier 冒烟测试', () => {
     expect(t.gLoad).toBeLessThan(1.01);
     expect((t.latitude * 180) / Math.PI).toBeCloseTo(28.5, 3);
     expect((t.longitude * 180) / Math.PI).toBeCloseTo(-80.6, 3);
-    expect(t.mass).toBe(532_200);
+    expect(t.mass).toBe(312_372);
     expect(t.pitch).toBeCloseTo(Math.PI / 2, 6);
 
     // 界面上不出现 NaN / Infinity / undefined 字样
@@ -276,7 +276,7 @@ test.describe('Orbital Frontier 冒烟测试', () => {
     await expect(page.getByTestId('readout-altitude')).toContainText('m');
     await expect(page.getByTestId('readout-latitude')).toContainText('28.50° N');
     await expect(page.getByTestId('readout-longitude')).toContainText('80.60° W');
-    await expect(page.getByTestId('readout-twr')).toContainText('1.40');
+    await expect(page.getByTestId('readout-twr')).toContainText('1.35');
 
     // 发射台上：点火按钮可用，导航球与节流阀已显示
     await expect(page.getByTestId('stage-button')).toBeEnabled();
@@ -428,7 +428,7 @@ test.describe('Orbital Frontier 冒烟测试', () => {
 
   test('选择不同火箭与发射场会改变物理状态；返回主菜单后复位', async ({ page }) => {
     await startApp(page);
-    await page.getByTestId('vehicle-zenith-3').click();
+    await page.getByTestId('vehicle-atlas-v-401').click();
     await page.getByTestId('site-kourou').click();
     await expect
       .poll(async () => {
@@ -437,13 +437,13 @@ test.describe('Orbital Frontier 冒烟测试', () => {
       })
       .toBe(5.24);
     const state = await expectAllFinite(page);
-    expect(state.sim.telemetry!.mass).toBe(607_200);
+    expect(state.sim.telemetry!.mass).toBe(332_120);
     // 近赤道发射场的自转线速度更高
     expect(state.sim.telemetry!.inertialSpeed).toBeGreaterThan(460);
 
     await enterFlight(page);
-    await expect(page.getByTestId('vehicle-panel')).toContainText('天顶三号');
-    await expect(page.getByTestId('stage-2')).toBeVisible();
+    await expect(page.getByTestId('vehicle-panel')).toContainText('宇宙神V 401');
+    await expect(page.getByTestId('stage-1')).toBeVisible();
 
     await page.getByTestId('warp-100').click();
     await expect.poll(async () => (await readState(page))!.sim.telemetry!.simTime).toBeGreaterThan(50);
@@ -459,15 +459,15 @@ test.describe('Orbital Frontier 冒烟测试', () => {
 
   test('玩家选择会保存到本地并在刷新后恢复', async ({ page }) => {
     await startApp(page);
-    await page.getByTestId('vehicle-meteor-s').click();
+    await page.getByTestId('vehicle-mercury-redstone').click();
     await page.getByTestId('site-jiuquan').click();
-    await expect(page.getByTestId('vehicle-meteor-s')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByTestId('vehicle-mercury-redstone')).toHaveAttribute('aria-pressed', 'true');
     await page.reload({ waitUntil: 'load' });
     await waitForRunning(page);
-    await expect(page.getByTestId('vehicle-meteor-s')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByTestId('vehicle-mercury-redstone')).toHaveAttribute('aria-pressed', 'true');
     await expect(page.getByTestId('site-jiuquan')).toHaveAttribute('aria-pressed', 'true');
     const state = await expectAllFinite(page);
-    expect(state.sim.telemetry!.mass).toBe(14_900);
+    expect(Math.round(state.sim.telemetry!.mass)).toBe(29_937);
   });
 
   test('点火起飞：火箭离开发射台，仪表与事件记录反映真实的飞行状态', async ({ page }) => {
@@ -484,13 +484,15 @@ test.describe('Orbital Frontier 冒烟测试', () => {
     const state = await expectAllFinite(page);
     const t = state.sim.telemetry!;
     expect(t.missionTime).toBeGreaterThan(0);
-    expect(t.thrust).toBeGreaterThan(7.0e6);
-    expect(t.thrust).toBeLessThan(8.2e6);
+    // 联盟-2.1a：四个 RD-107A 与一台 RD-108A 同时工作，海平面合计约 4147 kN
+    expect(t.thrust).toBeGreaterThan(4.0e6);
+    expect(t.thrust).toBeLessThan(4.6e6);
     expect(t.verticalSpeed).toBeGreaterThan(5);
-    expect(t.gLoad).toBeGreaterThan(1.3);
-    expect(t.gLoad).toBeLessThan(2.0);
-    expect(t.stagePropellant[0]!).toBeLessThan(400_000);
-    expect(t.mass).toBeLessThan(532_200);
+    expect(t.gLoad).toBeGreaterThan(1.25);
+    expect(t.gLoad).toBeLessThan(1.8);
+    expect(t.stagePropellant[0]!).toBeLessThan(156_640);
+    expect(t.stagePropellant[1]!).toBeLessThan(90_100);
+    expect(t.mass).toBeLessThan(312_372);
     expect(state.sim.events.slice(0, 2)).toEqual(['ignition', 'liftoff']);
     // 发动机工作时时间倍率受限
     expect(state.sim.maxTimeWarp).toBe(5);
@@ -501,7 +503,7 @@ test.describe('Orbital Frontier 冒烟测试', () => {
     await expect(page.getByTestId('mission-clock')).toContainText('T+');
     await expect(page.getByTestId('readout-engine')).toContainText('工作');
     await expect(page.getByTestId('event-log')).toContainText('起飞');
-    await expect(page.getByTestId('stage-button')).toContainText('分离一级');
+    await expect(page.getByTestId('stage-button')).toContainText('抛掉助推器');
     const hudText = await page.getByTestId('flight-hud').innerText();
     expect(hudText).not.toMatch(/NaN|Infinity|undefined/);
     expect(problems).toEqual([]);
@@ -544,9 +546,9 @@ test.describe('Orbital Frontier 冒烟测试', () => {
 
   test('关机后火箭继续按引力与阻力运动并最终坠毁；显示飞行结果，可重新发射', async ({ page }) => {
     await startApp(page);
-    await page.getByTestId('vehicle-meteor-s').click();
+    await page.getByTestId('vehicle-mercury-redstone').click();
     await enterFlight(page);
-    await expect.poll(async () => (await readState(page))!.sim.telemetry?.mass).toBe(14_900);
+    await expect.poll(async () => Math.round((await readState(page))!.sim.telemetry?.mass ?? 0)).toBe(29_937);
     await page.keyboard.press('Space');
     await expect.poll(async () => (await readState(page))!.sim.telemetry!.altitude, { timeout: 60_000 }).toBeGreaterThan(40);
     await page.keyboard.press('KeyX');
@@ -569,33 +571,37 @@ test.describe('Orbital Frontier 冒烟测试', () => {
     await expect.poll(async () => (await readState(page))!.sim.telemetry?.phase ?? null).toBe('prelaunch');
     await expect(page.getByTestId('flight-summary')).toHaveCount(0);
     const reset = await expectAllFinite(page);
-    expect(reset.sim.telemetry!.stagePropellant[0]).toBe(10_500);
+    expect(reset.sim.telemetry!.stagePropellant[0]).toBeCloseTo(23_614.23, 1);
     expect(reset.sim.events).toEqual([]);
   });
 
-  test('分级：分离后质量下降、下一级点火，被抛掉的箭体作为分离体继续被跟踪', async ({ page }) => {
+  test('分级：抛掉四个并联助推器——质量下降、芯级继续工作，四个助推器各自作为分离体被跟踪', async ({ page }) => {
     await startApp(page);
     await enterFlight(page);
     await page.keyboard.press('Space');
     await expect.poll(async () => (await readState(page))!.sim.telemetry!.missionTime ?? 0, { timeout: 60_000 }).toBeGreaterThan(5);
     await page.getByTestId('stage-button').click();
     await expect.poll(async () => (await readState(page))!.sim.telemetry!.activeStageIndex).toBe(1);
-    await expect.poll(async () => (await readState(page))!.debrisCount, { timeout: 30_000 }).toBe(1);
+    await expect.poll(async () => (await readState(page))!.debrisCount, { timeout: 30_000 }).toBe(4);
     const state = await expectAllFinite(page);
     const t = state.sim.telemetry!;
-    expect(t.stageAttached).toEqual([false, true]);
-    expect(t.mass).toBeLessThan(110_000);
+    expect(t.stageAttached).toEqual([false, true, true, true]);
+    expect(t.mass).toBeLessThan(150_000);
+    // 芯级没有中断：仍在工作，没有新的点火事件
+    expect(t.ignited).toBe(true);
+    expect(t.thrust).toBeGreaterThan(0);
     expect(state.sim.events).toContain('separation');
+    expect(state.sim.events.filter((e) => e === 'ignition')).toHaveLength(1);
     await expect(page.getByTestId('stage-0')).toContainText('已分离');
-    await expect(page.getByTestId('stage-button')).toContainText('分离二级');
-    await expect(page.getByTestId('event-log')).toContainText('一级分离');
+    await expect(page.getByTestId('stage-button')).toContainText('分离芯级（A）');
+    await expect(page.getByTestId('event-log')).toContainText('助推器（B/V/G/D）分离');
   });
 
   test('整流罩：飞行中按 F 抛罩，产生两个半罩分离体', async ({ page }) => {
     await startApp(page);
-    await page.getByTestId('vehicle-zenith-3').click();
+    await page.getByTestId('vehicle-atlas-v-401').click();
     await enterFlight(page);
-    await expect.poll(async () => (await readState(page))!.sim.telemetry?.mass).toBe(607_200);
+    await expect.poll(async () => (await readState(page))!.sim.telemetry?.mass).toBe(332_120);
     await expect(page.getByTestId('fairing-button')).toBeDisabled();
     await page.keyboard.press('Space');
     await expect.poll(async () => (await readState(page))!.sim.telemetry!.missionTime ?? 0, { timeout: 60_000 }).toBeGreaterThan(4);
@@ -639,7 +645,8 @@ test.describe('轨道动力学（阶段三）', () => {
     expect(t.inertialSpeed).toBeGreaterThan(7780);
     expect(t.inertialSpeed).toBeLessThan(7796);
     expect(t.gLoad).toBeLessThan(0.01);
-    expect(t.activeStageIndex).toBe(1);
+    // 从轨道出发：只剩飞船（服务舱与轨道舱 + 返回舱）
+    expect(t.activeStageIndex).toBe(3);
     expect(t.attitudeMode).toBe('manual');
     expect(state.sim.maxTimeWarp).toBe(1000);
     expect(state.sim.predictedImpact).toBeNull();
@@ -649,7 +656,7 @@ test.describe('轨道动力学（阶段三）', () => {
     await expect(page.getByTestId('readout-apoapsis')).toContainText('200.0');
     await expect(page.getByTestId('readout-periapsis')).toContainText('200.0');
     await expect(page.getByTestId('readout-inclination')).toHaveText('28.50');
-    await expect(page.getByTestId('stage-button')).toContainText('启动二级');
+    await expect(page.getByTestId('stage-button')).toContainText('启动服务舱与轨道舱');
 
     // 1000× 滑行约半圈：200 km 高度只有极稀薄的大气，轨道几乎不变，高度始终在 200 km 附近
     await page.getByTestId('warp-1000').click();
@@ -715,13 +722,14 @@ test.describe('轨道动力学（阶段三）', () => {
     // 入轨姿态本来就朝东：很快对准速度方向（俯仰≈0，航向≈90°）
     await expect.poll(async () => Math.abs((await readState(page))!.sim.telemetry!.pitch) * DEG, { timeout: 30_000 }).toBeLessThan(1);
 
-    // 启动二级并给满推力
+    // 启动服务舱主发动机（KTDU-80，2.95 kN）并给满推力
     await page.getByTestId('stage-button').click();
     await expect.poll(async () => (await readState(page))!.sim.telemetry!.ignited).toBe(true);
     expect((await readState(page))!.sim.telemetry!.thrust).toBe(0);
     await page.keyboard.press('KeyZ');
-    await expect.poll(async () => (await readState(page))!.sim.telemetry!.thrust).toBeGreaterThan(5e5);
-    await expect.poll(async () => (await readState(page))!.sim.telemetry!.orbit!.apoapsisAltitude, { timeout: 60_000 }).toBeGreaterThan(450_000);
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.thrust).toBeGreaterThan(2_500);
+    await page.getByTestId('warp-5').click();
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.orbit!.apoapsisAltitude, { timeout: 90_000 }).toBeGreaterThan(240_000);
     await page.keyboard.press('KeyX');
     await expect.poll(async () => (await readState(page))!.sim.telemetry!.thrust).toBe(0);
 
@@ -731,8 +739,8 @@ test.describe('轨道动力学（阶段三）', () => {
     // 顺行加速只抬高轨道另一侧：近地点仍在点火高度附近
     expect(orbit.periapsisAltitude).toBeGreaterThan(195_000);
     expect(orbit.periapsisAltitude).toBeLessThan(215_000);
-    expect(orbit.eccentricity).toBeGreaterThan(0.015);
-    expect(orbit.period).toBeGreaterThan(90 * 60);
+    expect(orbit.eccentricity).toBeGreaterThan(0.002);
+    expect(orbit.period).toBeGreaterThan(88.6 * 60);
     // 倾角不变（推力在轨道面内）
     expect(orbit.inclination * DEG).toBeCloseTo(28.5, 1);
     expect(state.sim.events).toContain('ignition');
@@ -766,16 +774,18 @@ test.describe('轨道动力学（阶段三）', () => {
       .toBe(true);
     await page.getByTestId('warp-1').click();
 
-    // 点火减速，直到近地点落到地面以下
+    // 点火减速，直到近地点落到地面以下（服务舱主发动机推力只有 2.95 kN，烧一两分钟）
     await page.keyboard.press('Space');
     await page.keyboard.press('KeyZ');
-    await expect.poll(async () => (await readState(page))!.sim.telemetry!.orbit!.periapsisAltitude, { timeout: 60_000 }).toBeLessThan(-150_000);
+    await page.getByTestId('warp-5').click();
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.orbit!.periapsisAltitude, { timeout: 120_000 }).toBeLessThan(-50_000);
     await page.keyboard.press('KeyX');
     await expect.poll(async () => (await readState(page))!.sim.telemetry!.thrust).toBe(0);
-    // 分离二级：带着推进级再入会在高空烧毁（发动机舱没有防热设计），只有返回舱能落到地面
-    await expect(page.getByTestId('flight-hint')).toContainText('分离二级');
+    await page.getByTestId('warp-1').click();
+    // 抛掉服务舱与轨道舱：带着它们再入会在高空烧毁（没有防热设计），只有返回舱能落到地面
+    await expect(page.getByTestId('flight-hint')).toContainText('分离服务舱与轨道舱');
     await page.keyboard.press('Space');
-    await expect.poll(async () => (await readState(page))!.sim.telemetry!.activeStageIndex).toBe(2);
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.activeStageIndex).toBe(4);
     await expect.poll(async () => (await readState(page))!.sim.telemetry!.parachute.phase).toBe('stowed');
     await expect(page.getByTestId('parachute-button')).toBeEnabled();
 
@@ -794,9 +804,9 @@ test.describe('轨道动力学（阶段三）', () => {
       if (settled) break;
     }
     const now = (await readState(page))!.sim.telemetry!.simTime;
-    // 从 200 km 轨道离轨：十几到二十几分钟后落地
+    // 从 200 km 轨道离轨：十几到三十几分钟后落地
     expect(predicted.time - now).toBeGreaterThan(600);
-    expect(predicted.time - now).toBeLessThan(2_400);
+    expect(predicted.time - now).toBeLessThan(3_000);
 
     // 快进到落地（保持逆行指向：防热大底朝前）；故意不开伞。再入加热开始后倍率自动限制在 10×
     await page.getByTestId('warp-1000').click();
@@ -824,7 +834,7 @@ test.describe('轨道动力学（阶段三）', () => {
   });
 });
 
-/** 从近地轨道出发，逆行点火离轨并分离二级：只剩返回舱在一条再入轨道上。 */
+/** 从近地轨道出发，逆行点火离轨并抛掉服务舱与轨道舱：只剩返回舱在一条再入轨道上。 */
 const deorbitCapsule = async (page: Page): Promise<void> => {
   await enterOrbit(page);
   await page.keyboard.press('KeyT');
@@ -841,11 +851,14 @@ const deorbitCapsule = async (page: Page): Promise<void> => {
   await page.getByTestId('warp-1').click();
   await page.keyboard.press('Space');
   await page.keyboard.press('KeyZ');
-  await expect.poll(async () => (await readState(page))!.sim.telemetry!.orbit!.periapsisAltitude, { timeout: 60_000 }).toBeLessThan(30_000);
+  // KTDU-80 只有 2.95 kN：用 5× 烧到近地点 30 km 以下
+  await page.getByTestId('warp-5').click();
+  await expect.poll(async () => (await readState(page))!.sim.telemetry!.orbit!.periapsisAltitude, { timeout: 120_000 }).toBeLessThan(30_000);
   await page.keyboard.press('KeyX');
   await expect.poll(async () => (await readState(page))!.sim.telemetry!.thrust).toBe(0);
+  await page.getByTestId('warp-1').click();
   await page.keyboard.press('Space');
-  await expect.poll(async () => (await readState(page))!.sim.telemetry!.activeStageIndex).toBe(2);
+  await expect.poll(async () => (await readState(page))!.sim.telemetry!.activeStageIndex).toBe(4);
 };
 
 test.describe('再入与热防护（阶段四）', () => {
@@ -901,10 +914,10 @@ test.describe('再入与热防护（阶段四）', () => {
     expect(stats.maxHeatFlux).toBeGreaterThan(350_000);
     expect(stats.maxHeatFlux).toBeLessThan(800_000);
     expect(stats.maxSurfaceTemperature).toBe(1_500);
-    // 烧蚀层消耗了一部分
+    // 烧蚀层消耗了一部分（联盟号返回舱的单位面积热载荷比原来的虚构飞船大）
     const final = state.sim.telemetry!.thermal.find((z) => z.zone === 'base')!;
-    expect(final.ablatorFraction).toBeGreaterThan(0.6);
-    expect(final.ablatorFraction).toBeLessThan(0.95);
+    expect(final.ablatorFraction).toBeGreaterThan(0.3);
+    expect(final.ablatorFraction).toBeLessThan(0.85);
     expect(state.sim.events).toEqual(expect.arrayContaining(['separation', 'drogue-deployed', 'main-deployed', 'landed']));
 
     await expect(page.getByTestId('flight-outcome')).toHaveText('已着陆');
@@ -983,16 +996,18 @@ test.describe('再入与热防护（阶段四）', () => {
     await page.getByTestId('warp-1').click();
     await page.keyboard.press('Space');
     await page.keyboard.press('KeyZ');
-    await expect.poll(async () => (await readState(page))!.sim.telemetry!.orbit!.periapsisAltitude, { timeout: 60_000 }).toBeLessThan(30_000);
+    await page.getByTestId('warp-5').click();
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.orbit!.periapsisAltitude, { timeout: 120_000 }).toBeLessThan(30_000);
     await page.keyboard.press('KeyX');
     await expect.poll(async () => (await readState(page))!.sim.telemetry!.thrust).toBe(0);
+    await page.getByTestId('warp-1').click();
     await page.keyboard.press('Space');
-    await expect.poll(async () => (await readState(page))!.sim.telemetry!.activeStageIndex).toBe(2);
+    await expect.poll(async () => (await readState(page))!.sim.telemetry!.activeStageIndex).toBe(4);
 
-    // 只剩返回舱：配平迎角约 20°（由质心偏移算出），可以进入配平模式
+    // 只剩返回舱：配平迎角约 17°（由质心偏移算出），可以进入配平模式
     const alone = (await readState(page))!.sim.telemetry!;
-    expect(alone.trimAngle * DEG).toBeGreaterThan(18);
-    expect(alone.trimAngle * DEG).toBeLessThan(21);
+    expect(alone.trimAngle * DEG).toBeGreaterThan(15);
+    expect(alone.trimAngle * DEG).toBeLessThan(19);
     expect(alone.canJettisonHeatShield).toBe(true);
     await expect(page.getByTestId('attitude-trim')).toBeEnabled();
     await page.keyboard.press('KeyY');
@@ -1017,12 +1032,12 @@ test.describe('再入与热防护（阶段四）', () => {
     await page.keyboard.up('KeyQ');
     expect(Math.abs((await readState(page))!.sim.telemetry!.bankAngle) * DEG).toBeLessThan(15);
 
-    // 再入：升阻比约 0.3
+    // 再入：升阻比约 0.27
     await page.getByTestId('warp-1000').click();
     await expect.poll(async () => (await readState(page))!.sim.telemetry!.referenceHeatFlux, { timeout: 150_000 }).toBeGreaterThan(250_000);
     const heating = await expectAllFinite(page);
-    expect(heating.sim.telemetry!.liftToDrag).toBeGreaterThan(0.27);
-    expect(heating.sim.telemetry!.liftToDrag).toBeLessThan(0.34);
+    expect(heating.sim.telemetry!.liftToDrag).toBeGreaterThan(0.22);
+    expect(heating.sim.telemetry!.liftToDrag).toBeLessThan(0.32);
     await expect(page.getByTestId('flight-hint')).toContainText('配平再入');
 
     // 降到 4 km 以下再开伞（缩短伞降时间）
@@ -1034,12 +1049,12 @@ test.describe('再入与热防护（阶段四）', () => {
     expect((await readState(page))!.sim.telemetry!.attitudeMode).toBe('manual');
     await expect(page.getByTestId('flight-hint')).toContainText('按 H 抛掉防热大底');
 
-    // H：抛大底——质量减少 650 kg，底部热区换成舱底结构，多出一个分离体
+    // H：抛大底——质量减少 300 kg，底部热区换成舱底结构，多出一个分离体
     const before = (await readState(page))!;
     await page.keyboard.press('KeyH');
     await expect.poll(async () => (await readState(page))!.sim.telemetry!.heatShieldAttached).toBe(false);
     const after = await expectAllFinite(page);
-    expect(after.sim.telemetry!.mass).toBeCloseTo(before.sim.telemetry!.mass - 650, 3);
+    expect(after.sim.telemetry!.mass).toBeCloseTo(before.sim.telemetry!.mass - 300, 3);
     expect(after.sim.events).toContain('heat-shield');
     // 分离体数量取自渲染帧（软件渲染下帧率很低，要等下一帧）
     await expect.poll(async () => (await readState(page))!.debrisCount, { timeout: 30_000 }).toBeGreaterThanOrEqual(1);
@@ -1049,11 +1064,11 @@ test.describe('再入与热防护（阶段四）', () => {
 
     await expect.poll(async () => (await readState(page))!.sim.outcome?.kind ?? null, { timeout: 200_000 }).toBe('landed');
     const state = await expectAllFinite(page);
-    // 抛掉大底后落得更慢（带着大底约 7.8 m/s）
-    expect(state.sim.outcome!.impactSpeed).toBeGreaterThan(6.5);
-    expect(state.sim.outcome!.impactSpeed).toBeLessThan(7.7);
-    // 升力式再入：整个飞行的最大过载就是开伞冲击（约 4.4 g），远低于弹道式的 8 g
-    expect(state.sim.stats!.maxGLoad).toBeLessThan(5.5);
+    // 抛掉大底后落得更慢（带着大底约 7.0 m/s）
+    expect(state.sim.outcome!.impactSpeed).toBeGreaterThan(6);
+    expect(state.sim.outcome!.impactSpeed).toBeLessThan(7.2);
+    // 升力式再入：最大过载约 5 g，远低于弹道式的 8 g
+    expect(state.sim.stats!.maxGLoad).toBeLessThan(6);
     const hudText = await page.getByTestId('flight-hud').innerText();
     expect(hudText).not.toMatch(/NaN|Infinity|undefined/);
     expect(problems).toEqual([]);
@@ -1103,7 +1118,7 @@ test.describe('任务系统（阶段五）', () => {
     await expect(page.getByTestId('briefing-title')).toHaveText('突破卡门线');
     await expect(page.getByTestId('briefing-objectives')).toContainText('最大高度达到 100 km');
     await expect(page.getByTestId('briefing-objectives')).toContainText('附加目标');
-    await expect(page.getByTestId('briefing-scoring')).toContainText('回收返回舱');
+    await expect(page.getByTestId('briefing-scoring')).toContainText('回收飞船');
     await expect(page.getByTestId('briefing-plan').locator('li')).toHaveCount(5);
     await expect(page.getByTestId('start-mission')).toBeEnabled();
     await expect(page.getByTestId('start-mission')).toHaveText('开始任务');
@@ -1117,9 +1132,10 @@ test.describe('任务系统（阶段五）', () => {
     await expect(page.getByTestId('launch-note')).toContainText('183°');
     await expect(page.getByTestId('launch-note')).toContainText('航向 180°');
     await page.getByTestId('mission-inclined-orbit').click();
-    await expect(page.getByTestId('launch-note')).toContainText('043°');
-    await expect(page.getByTestId('launch-note')).toContainText('W + D');
-    await expect(page.getByTestId('launch-note')).toContainText('W + A');
+    // 拜科努尔飞 51.6°：方位角 062°，按住 D、间断点按 W；用 W 增大倾角
+    await expect(page.getByTestId('launch-note')).toContainText('062°');
+    await expect(page.getByTestId('launch-note')).toContainText('间断点按');
+    await expect(page.getByTestId('launch-note')).toContainText('增大倾角按 W');
     await page.getByTestId('mission-first-orbit').click();
     await expect(page.getByTestId('launch-note')).toHaveCount(0);
 
@@ -1180,11 +1196,11 @@ test.describe('任务系统（阶段五）', () => {
     await expect(page.getByTestId('flight-hud')).toBeVisible();
     await waitForRunning(page);
     await expect.poll(async () => (await readState(page))!.sim.missionId).toBe('karman-line');
-    // 任务规定的火箭与发射场：流星-S，酒泉
-    await expect(page.getByTestId('vehicle-panel')).toContainText('流星-S');
+    // 任务规定的火箭与发射场：水星-红石，卡纳维拉尔角
+    await expect(page.getByTestId('vehicle-panel')).toContainText('水星-红石');
     const pad = await expectAllFinite(page);
     expect(pad.sim.telemetry!.phase).toBe('prelaunch');
-    expect(pad.sim.telemetry!.latitude * DEG).toBeCloseTo(40.96, 1);
+    expect(pad.sim.telemetry!.latitude * DEG).toBeCloseTo(28.5, 1);
     await expect(page.getByTestId('mission-strip')).toContainText('任务 · 突破卡门线');
     await expect(page.getByTestId('objective-altitude')).toContainText('最大高度 0 / 100 km');
     await expect(page.getByTestId('objective-recover')).toContainText('附加');
@@ -1195,7 +1211,7 @@ test.describe('任务系统（阶段五）', () => {
     await expect.poll(async () => (await readState(page))!.sim.telemetry!.phase).toBe('flight');
     await page.getByTestId('warp-5').click();
     await expect(page.getByTestId('flight-hint')).toContainText('保持竖直上升');
-    // 燃尽：分离返回舱
+    // 关机：分离水星飞船
     await expect.poll(async () => (await readState(page))!.sim.telemetry!.stagePropellant[0], { timeout: 120_000 }).toBe(0);
     await expect(page.getByTestId('flight-hint')).toContainText('按 空格 分离');
     await page.keyboard.press('Space');
@@ -1233,7 +1249,7 @@ test.describe('任务系统（阶段五）', () => {
     await expect(page.getByTestId('mission-grade')).toHaveText('S');
     await expect(page.getByTestId('mission-score')).toContainText('100');
     await expect(page.getByTestId('mission-score-items').locator('tr')).toHaveCount(3);
-    await expect(page.getByTestId('mission-score-items')).toContainText('回收返回舱');
+    await expect(page.getByTestId('mission-score-items')).toContainText('回收飞船');
     await expect(page.getByTestId('flight-outcome')).toHaveText('已着陆');
     await expect(page.getByTestId('flight-stats')).toContainText('最大高度');
     // 飞行记录曲线画出来了
@@ -1274,7 +1290,7 @@ test.describe('任务系统（阶段五）', () => {
     await expect(page.getByTestId('logbook-entry')).toHaveCount(1);
     await expect(page.getByTestId('logbook-entry')).toContainText('突破卡门线');
     await expect(page.getByTestId('logbook-entry')).toContainText('安全着陆');
-    await expect(page.getByTestId('logbook-entry')).toContainText('流星-S');
+    await expect(page.getByTestId('logbook-entry')).toContainText('水星-红石');
 
     // 刷新页面：进度与记录仍在
     await page.reload({ waitUntil: 'load' });
@@ -1334,7 +1350,7 @@ test.describe('任务系统（阶段五）', () => {
   test('自由飞行不带任务：没有任务条，结果面板没有评分；飞行结束后留下一条记录', async ({ page }) => {
     test.setTimeout(240_000);
     const problems = await startApp(page);
-    await page.getByTestId('vehicle-meteor-s').click();
+    await page.getByTestId('vehicle-mercury-redstone').click();
     await waitForRunning(page);
     await enterFlight(page);
     expect((await readState(page))!.sim.missionId).toBeNull();

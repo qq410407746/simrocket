@@ -8,7 +8,7 @@ beforeEach(() => {
   vi.stubGlobal('localStorage', storage); vi.stubGlobal('window', { localStorage: storage });
 });
 afterEach(() => vi.unstubAllGlobals());
-const draft = () => designFromVehicle(getVehicleOrDefault('meteor-s'), 'custom-test');
+const draft = () => designFromVehicle(getVehicleOrDefault('mercury-redstone'), 'custom-test');
 describe('图纸持久化', () => {
   it('刷新恢复自定义选择；任务仍强制规定型号', async () => {
     const { useDesignStore } = await import('./designStore');
@@ -19,7 +19,7 @@ describe('图纸持久化', () => {
     const { useGameStore: reloaded } = await import('./gameStore');
     expect(reloaded.getState().vehicleId).toBe('custom-test');
     reloaded.getState().startMission('first-orbit');
-    expect(reloaded.getState().vehicleId).toBe('frontier-1');
+    expect(reloaded.getState().vehicleId).toBe('soyuz-2-1a');
   });
   it('存储配额失败不改内存或已有图纸，并明确提示', async () => {
     const { useDesignStore } = await import('./designStore');

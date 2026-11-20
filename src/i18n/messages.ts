@@ -23,6 +23,7 @@ const EXACT: Readonly<Record<string, string>> = {
   // Design compiler (game/vehicles/design.ts)
   '图纸格式无效，或引用了不存在的模块。': 'Invalid design format, or it references a module that does not exist.',
   '模块接口直径不同；尚未提供转接结构，请选择接口相同的推进级与载荷。': 'Module interface diameters differ. Adapter structures are not available yet; choose stages and a payload with the same interface.',
+  '并联助推器只能放在它原配的芯级下面（不能单独使用，也不能放在最上面）。': 'Strap-on boosters can only go directly below their own core stage (they cannot be used alone or placed on top).',
   '海平面推重比不超过1，满推力也无法从发射台起飞。': 'Sea-level thrust-to-weight ratio is 1 or less: the rocket cannot lift off even at full thrust.',
   '四级构型尚无任务驾驶基准，请通过自由飞行验证。': 'Four-stage configurations have no piloting benchmark yet; verify them in Free flight.',
   // Flight archive (archiveStore / flightArchiveDb)

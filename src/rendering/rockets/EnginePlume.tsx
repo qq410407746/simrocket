@@ -18,6 +18,8 @@ import type { PlumeExit } from './rocketLayout';
 const PLUME_COLORS: Record<EngineDefinition['propellant'], { core: string; edge: string; opacity: number }> = {
   // 煤油/液氧：富含碳烟，明亮的黄橙色
   kerolox: { core: '#fff3d0', edge: '#ff7a1a', opacity: 1 },
+  // 乙醇/液氧：碳烟很少，偏透明的橙红色
+  alcolox: { core: '#fff0dc', edge: '#ff6a3a', opacity: 0.7 },
   // 氢氧：几乎透明的淡蓝色
   hydrolox: { core: '#e9f4ff', edge: '#5aa2ff', opacity: 0.45 },
   // 自燃推进剂：较暗的橙色

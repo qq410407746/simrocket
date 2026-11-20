@@ -7,7 +7,7 @@ interface GeoDebugApi {
     missionScore: { total: number; grade: string } | null;
     telemetry: {
       simTime: number; phase: string; ignited: boolean; pitch: number; altitude: number;
-      surfaceSpeed: number; verticalSpeed: number; activeStageIndex: number;
+      surfaceSpeed: number; verticalSpeed: number; activeStageIndex: number; gLoad: number;
       stagePropellant: number[]; fairingAttached: boolean; attitudeMode: string; throttle: number;
       satelliteDeployedAt: number | null;
       synchronous: { geo: boolean; gso: boolean; periodError: number | null; longitudeSpan: number | null };
@@ -24,7 +24,7 @@ test('暂停时规划三分量节点、预览与地面轨迹不改变物理状�
   await page.goto('/');
   await page.getByTestId('quality-low').click();
   await page.getByTestId('tab-sandbox').click();
-  await page.getByTestId('vehicle-zenith-3').click();
+  await page.getByTestId('vehicle-atlas-v-401').click();
   await page.getByTestId('start-orbit').click();
   await page.getByTestId('enter-flight').click();
   await page.getByTestId('pause-button').click();
@@ -88,6 +88,12 @@ test('从发射台规划并执行 GTO、远地点圆化、部署卫星并确认 
       }
     };
     const warp = (value: number) => { if (api.sim().timeWarp !== value) click(`warp-${value}`); };
+    // 宇宙神 V 的 RD-180 可以节流：芯级末段过载超过 5 g 就按住 ↓，降回 4.8 g 以下松开
+    const throttleDown = (down: boolean) => {
+      if (down === held.has('ArrowDown')) return;
+      window.dispatchEvent(new KeyboardEvent(down ? 'keydown' : 'keyup', { code: 'ArrowDown', key: 'ArrowDown' }));
+      if (down) held.add('ArrowDown'); else held.delete('ArrowDown');
+    };
     let phase = 'vertical', settledAt = 0, pitchTarget = 90, nextDecision = 0;
     let lastTime = -1, lastAction = -1, resumeAt = 0, duration = 0, started = false, maneuvers = 0, fine = false;
     let lastReport = '', lastWall = 0;
@@ -111,15 +117,20 @@ test('从发射台规划并执行 GTO、远地点圆化、部署卫星并确认 
           click('throttle-cut'); steer(0); warp(1); phase = 'orbit';
           click('camera-map'); resumeAt = t.simTime + 15; return;
         }
-        if (t.activeStageIndex < 2 && t.stagePropellant[t.activeStageIndex] === 0 && t.simTime - lastAction > 2) {
-          click('stage-button'); click('attitude-manual'); steer(0); phase = 'manual';
+        if (t.activeStageIndex === 0) throttleDown(t.gLoad > 5 || (held.has('ArrowDown') && t.gLoad > 4.8));
+        if (t.activeStageIndex < 1 && t.stagePropellant[t.activeStageIndex] === 0 && t.simTime - lastAction > 2) {
+          throttleDown(false);
+          click('stage-button'); click('throttle-full'); click('attitude-manual'); steer(0); phase = 'manual';
           pitchTarget = Math.round(pitch / 5) * 5; nextDecision = t.simTime + 3; lastAction = t.simTime; warp(1); return;
         }
         if (t.fairingAttached && t.altitude > 100_000) click('fairing-button');
-        if (phase === 'vertical' && t.surfaceSpeed >= 60) { steer(1); phase = 'kick'; }
-        else if (phase === 'kick' && pitch <= 89.7) { steer(0); phase = 'settle'; settledAt = t.simTime; }
+        // 推重比只有约 1.2：100 m/s 才倾斜，只倾斜约 1.5°
+        if (phase === 'vertical' && t.surfaceSpeed >= 100) { steer(1); phase = 'kick'; }
+        else if (phase === 'kick' && pitch <= 88.5) { steer(0); phase = 'settle'; settledAt = t.simTime; }
         else if (phase === 'settle' && t.simTime >= settledAt + 5) { click('attitude-prograde'); phase = 'prograde'; warp(5); }
         else if (phase === 'manual') {
+          // 半人马座要烧十几分钟：发动机工作时最高 5×
+          warp(5);
           if (t.simTime >= nextDecision) {
             nextDecision = t.simTime + 3;
             const error = Math.max(-100, Math.min(600, (200_000 - t.altitude) / 60)) - t.verticalSpeed;
@@ -138,19 +149,22 @@ test('从发射台规划并执行 GTO、远地点圆化、部署卫星并确认 
       if (!snapshot.maneuver) {
         if (t.simTime - lastAction < 3) return;
         warp(1);
+        // 精修：轨道已接近圆形时只用"同步高度修正"——依次在两个拱点把对面拉到同步高度，
+        // 不与"远地点圆化"交替（两者交替时在同步高度上方会互相抵消，周期误差不变）
         const kind = pending === 'gto' ? 'gto' : (t.orbit?.inclination ?? 1) > 0.001 ? 'equatorial'
           : t.orbit && t.orbit.apoapsisAltitude - t.orbit.periapsisAltitude > 100_000 ? 'circular'
-          : maneuvers % 2 === 0 ? 'synchronous' : 'circular';
+          : 'synchronous';
         click(`plan-${kind}`);
         lastAction = t.simTime; started = false; fine = false; duration = 0; maneuvers++;
-        if (maneuvers > 8) { clearInterval(timer); throw new Error('机动未收敛'); }
+        if (maneuvers > 16) { clearInterval(timer); throw new Error('机动未收敛'); }
         return;
       }
       if (t.attitudeMode !== 'maneuver' && !started) click('point-maneuver');
       if (!duration) duration = Number(document.querySelector('[data-testid="maneuver-status"]')?.getAttribute('data-burn-duration') ?? 0);
       if (!duration) return;
       const plan = snapshot.maneuver, remaining = Math.hypot(plan.remaining.x, plan.remaining.y, plan.remaining.z);
-      if (!started && remaining < 0.7) { warp(1); click('clear-maneuver'); resumeAt = t.simTime + 20; return; }
+      // 0.02 s 的短脉冲约 0.5 m/s：小于 0.2 m/s 的节点才放弃，否则照样执行
+      if (!started && remaining < 0.2) { warp(1); click('clear-maneuver'); resumeAt = t.simTime + 20; return; }
       if (!started) {
         if (t.simTime >= plan.node.time - duration / 2) {
           warp(1); started = true;
@@ -165,7 +179,7 @@ test('从发射台规划并执行 GTO、远地点圆化、部署卫星并确认 
       }
       if (pending === 'gto' && remaining < 10) click('attitude-prograde');
       const targetAltitude = Math.cbrt(3.986004418e14 / (7.292115e-5 ** 2)) - 6_371_000;
-      const done = pending === 'gto' ? (t.orbit?.apoapsisAltitude ?? 0) >= targetAltitude : remaining < 0.7;
+      const done = pending === 'gto' ? (t.orbit?.apoapsisAltitude ?? 0) >= targetAltitude : remaining < 0.3;
       if (done || (!fine && remaining > 25 && t.simTime > plan.node.time + duration)) {
         click('throttle-cut'); click('clear-maneuver'); resumeAt = t.simTime + 20; warp(1); return;
       }

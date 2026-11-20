@@ -86,11 +86,14 @@ import {
   configurationThermalZones,
   configurationTrimAngle,
   initialConfiguration,
+  isParallelStage,
   lowestAttachedStage,
   stackHeight,
   stageAloneMassProperties,
+  timeToFirstDepletion,
+  unitMassFlow,
 } from '../vehicles/configuration';
-import { heatShieldCenterHeight } from '../vehicles/analysis';
+import { heatShieldCenterHeight, stackLength } from '../vehicles/analysis';
 import type {
   FlightDiagnostics,
   FlightPhase,
@@ -127,6 +130,15 @@ export const ATTITUDE_CONTROL: AttitudeControlParams = {
 
 /** 级间分离机构给出的相对分离速度 [m/s]。 */
 const STAGE_SEPARATION_SPEED = 1.5;
+/** 并联助推器分离时的径向分离速度 [m/s]（量级估计）。 */
+const BOOSTER_SEPARATION_SPEED = 2;
+
+/** 与单位矢量 n 垂直的一对正交单位矢量。 */
+const perpendicularPair = (n: Vec3): [Vec3, Vec3] => {
+  const helper = Math.abs(n.x) < 0.9 ? vec3(1, 0, 0) : vec3(0, 1, 0);
+  const u = normalize(cross(n, helper));
+  return [u, cross(n, u)];
+};
 /** 整流罩半罩的横向分离速度 [m/s]。 */
 const FAIRING_SEPARATION_SPEED = 3;
 /** 防热大底的分离速度 [m/s]（弹射机构给出的相对速度）。 */
@@ -379,6 +391,7 @@ interface DebrisBody {
   readonly kind: DebrisKind;
   readonly stageIndex: number;
   readonly half: -1 | 0 | 1;
+  readonly unit: number;
   readonly r: MutableVec3;
   readonly v: MutableVec3;
   attitude: Quat;
@@ -709,6 +722,7 @@ export class Simulation {
       kind: d.kind,
       stageIndex: d.stageIndex,
       half: d.half,
+      unit: d.unit,
       position: vec3(d.r.x, d.r.y, d.r.z),
       velocity: vec3(d.v.x, d.v.y, d.v.z),
       attitude: d.attitude,
@@ -841,7 +855,10 @@ export class Simulation {
 
     const index = lowestAttachedStage(this.cfg);
     if (index < this.cfg.stages.length) {
+      // 抛掉并联助推器组时芯级本来就在工作：保持点火状态，不重新点火。
+      const strapOn = isParallelStage(this.vehicle.stages[index]);
       this.separateStage(index);
+      if (strapOn) return;
       const next = lowestAttachedStage(this.cfg);
       this.ignited = next < this.cfg.stages.length;
       if (this.ignited) this.emit('ignition', next);
@@ -1006,16 +1023,14 @@ export class Simulation {
       return;
     }
 
-    // 仍被牵制：在台上燃烧一个步长。
-    const burned = Math.min(propulsion.propellantMass, massFlow * this.dt);
-    this.consumePropellant(propulsion, burned);
+    // 仍被牵制：在台上燃烧一个步长（步内有单元烧完时只烧到那一刻）。
+    const span = Math.min(this.dt, timeToFirstDepletion(propulsion, effectiveThrottle));
+    const depleted = this.consumePropellant(propulsion, effectiveThrottle, span, span < this.dt);
     this.refreshConfiguration();
-    if (burned >= propulsion.propellantMass) {
-      this.emit('depleted', propulsion.stageIndex);
-      this.updatePadDiagnostics(0, 0, 0);
-    } else {
-      this.updatePadDiagnostics(thrust, massFlow, effectiveThrottle);
-    }
+    for (const index of depleted) this.emit('depleted', index);
+    const after = activePropulsion(this.vehicle, this.cfg);
+    if (!after || after.propellantMass <= 0) this.updatePadDiagnostics(0, 0, 0);
+    else this.updatePadDiagnostics(thrust, massFlow, effectiveThrottle);
   }
 
   /** 自由飞行的一步：[t0, t0 + dt]。 */
@@ -1034,19 +1049,21 @@ export class Simulation {
     fm.noseY = nose.y;
     fm.noseZ = nose.z;
 
-    const propulsion = activePropulsion(this.vehicle, this.cfg);
+    let propulsion = activePropulsion(this.vehicle, this.cfg);
     let effectiveThrottle = 0;
     let massFlow = 0;
-    let burnTime = 0;
-    if (this.ignited && this.throttle > 0 && propulsion && propulsion.propellantMass > 0) {
-      effectiveThrottle = Math.max(propulsion.engine.minThrottle, this.throttle);
-      massFlow = engineMassFlow(propulsion.engine, effectiveThrottle) * propulsion.engineCount;
-      burnTime = Math.min(dt, propulsion.propellantMass / massFlow);
-    }
-
     let t = t0;
     let burning = false;
-    if (propulsion && burnTime > 0) {
+    // 有动力段。并联构型里助推器先烧完时，芯级在同一步的剩余时间里继续工作（最多分成几段）。
+    for (let segment = 0; segment < 4; segment++) {
+      if (!(this.ignited && this.throttle > 0 && propulsion && propulsion.propellantMass > 0)) break;
+      const left = t0 + dt - t;
+      if (left <= 1e-12 || this.phase !== 'flight') break;
+      effectiveThrottle = Math.max(propulsion.engine.minThrottle, this.throttle);
+      massFlow = engineMassFlow(propulsion.engine, effectiveThrottle) * propulsion.engineCount;
+      const toDepletion = timeToFirstDepletion(propulsion, effectiveThrottle);
+      const burnTime = Math.min(left, toDepletion);
+      if (!(burnTime > 0)) break;
       fm.thrustVacuum = effectiveThrottle * propulsion.engine.thrustVacuum * propulsion.engineCount;
       fm.exitArea = propulsion.engine.nozzleExitArea * propulsion.engineCount;
       fm.massFlow = massFlow;
@@ -1055,18 +1072,19 @@ export class Simulation {
       const elapsed = this.integrateSegment(t, burnTime, nose);
       t += elapsed;
       if (elapsed > 0) this.lastOrbitChangeTime = this.time;
-      // 残量小于一微克视为耗尽（含"恰好在步末烧完"的情形）。
-      const depleted = propulsion.propellantMass - massFlow * elapsed <= 1e-9;
-      this.consumePropellant(propulsion, depleted ? propulsion.propellantMass : massFlow * elapsed);
-      if (this.maneuver) {
+      const massBefore = this.mass;
+      const depleted = this.consumePropellant(propulsion, effectiveThrottle, elapsed, elapsed >= toDepletion - 1e-12);
+      if (this.maneuver && elapsed > 0) {
         // RK4末端压力给出这一小段的有效排气速度；真空时退化为火箭方程。
         const effectiveExhaust = fm.thrust / massFlow;
-        const delivered = effectiveExhaust * Math.log(this.mass / (this.mass - massFlow * elapsed));
+        const delivered = effectiveExhaust * Math.log(massBefore / (massBefore - massFlow * elapsed));
         this.maneuver.remaining = addScaled(this.maneuver.remaining, nose, -delivered);
       }
       this.refreshConfiguration();
-      if (depleted) this.emit('depleted', propulsion.stageIndex);
-      burning = !depleted;
+      for (const index of depleted) this.emit('depleted', index);
+      propulsion = activePropulsion(this.vehicle, this.cfg);
+      burning = propulsion !== null && propulsion.propellantMass > 0;
+      if (elapsed < burnTime) break;
     }
 
     const remaining = t0 + dt - t;
@@ -1493,21 +1511,47 @@ export class Simulation {
     const debrisKick = (-STAGE_SEPARATION_SPEED * this.mass) / total;
 
     const lateralArea = stage.geometry.diameter * stage.geometry.length;
-    this.addDebris({
-      kind: 'stage',
-      stageIndex: index,
-      half: 0,
-      position: addScaled(position, nose, dropped.centerOfMassHeight - oldCom),
-      velocity: addScaled(velocity, nose, debrisKick),
-      angularVelocity: vec3(0, 0.03, 0.012),
-      mass: dropped.mass,
-      propellantMass: state.propellantMass,
-      dragArea:
-        0.5 * stage.aero.dragCoefficient * stage.aero.referenceArea + 0.5 * CROSS_FLOW_DRAG_COEFFICIENT * lateralArea,
-    });
+    const dragArea = 0.5 * stage.aero.dragCoefficient * stage.aero.referenceArea + 0.5 * CROSS_FLOW_DRAG_COEFFICIENT * lateralArea;
+    const count = stage.parallel?.count ?? 0;
+    if (count > 0) {
+      // 并联助推器：每个助推器各成一个分离体，位于芯级周围，沿径向向外推开（总动量仍守恒）。
+      const core = this.vehicle.stages[index + 1];
+      const ring = (core ? core.geometry.diameter / 2 : 0) + stage.geometry.diameter / 2;
+      const [u, w] = perpendicularPair(nose);
+      for (let k = 0; k < count; k++) {
+        const angle = (2 * Math.PI * k) / count;
+        const radial = vec3(Math.cos(angle) * u.x + Math.sin(angle) * w.x, Math.cos(angle) * u.y + Math.sin(angle) * w.y, Math.cos(angle) * u.z + Math.sin(angle) * w.z);
+        const along = addScaled(position, nose, dropped.centerOfMassHeight - oldCom);
+        this.addDebris({
+          kind: 'stage',
+          stageIndex: index,
+          half: 0,
+          unit: k,
+          position: addScaled(along, radial, ring),
+          velocity: addScaled(addScaled(velocity, nose, debrisKick), radial, BOOSTER_SEPARATION_SPEED),
+          angularVelocity: vec3(0, 0.05 * Math.cos(angle), 0.05 * Math.sin(angle)),
+          mass: dropped.mass / count,
+          propellantMass: state.propellantMass / count,
+          dragArea,
+        });
+      }
+    } else {
+      this.addDebris({
+        kind: 'stage',
+        stageIndex: index,
+        half: 0,
+        unit: 0,
+        position: addScaled(position, nose, dropped.centerOfMassHeight - oldCom),
+        velocity: addScaled(velocity, nose, debrisKick),
+        angularVelocity: vec3(0, 0.03, 0.012),
+        mass: dropped.mass,
+        propellantMass: state.propellantMass,
+        dragArea,
+      });
+    }
 
-    // 剩余部分的质心：原底面之上 (被抛级长度 + 新质心高度) 处。
-    this.shiftPosition(nose, stage.geometry.length + this.centerOfMassHeight - oldCom);
+    // 剩余部分的质心：原底面之上 (被抛级长度 + 新质心高度) 处；并联助推器与芯级底面齐平，基准不变。
+    this.shiftPosition(nose, stackLength(stage) + this.centerOfMassHeight - oldCom);
     this.v.x += nose.x * vehicleKick;
     this.v.y += nose.y * vehicleKick;
     this.v.z += nose.z * vehicleKick;
@@ -1519,6 +1563,8 @@ export class Simulation {
     kind: DebrisKind;
     stageIndex: number;
     half: -1 | 0 | 1;
+    /** 并联助推器组中的第几个（其余分离体为 0）。 */
+    unit?: number;
     position: Vec3;
     velocity: Vec3;
     angularVelocity: Vec3;
@@ -1531,6 +1577,7 @@ export class Simulation {
       kind: init.kind,
       stageIndex: init.stageIndex,
       half: init.half,
+      unit: init.unit ?? 0,
       r: { x: init.position.x, y: init.position.y, z: init.position.z },
       v: { x: init.velocity.x, y: init.velocity.y, z: init.velocity.z },
       attitude: this.attitude,
@@ -1572,13 +1619,28 @@ export class Simulation {
     this.events.push({ kind, time: this.time, stageIndex });
   }
 
-  private consumePropellant(propulsion: ActivePropulsion, amount: number): void {
-    if (propulsion.source === 'stage') {
-      const state = this.cfg.stages[propulsion.stageIndex];
-      if (state) state.propellantMass = Math.max(0, state.propellantMass - amount);
-    } else {
-      this.cfg.payloadPropellantMass = Math.max(0, this.cfg.payloadPropellantMass - amount);
+  /**
+   * 各推进单元按自己的质量流量燃烧 duration 秒。
+   * untilDepletion 为真表示这一段正好烧到"第一个单元耗尽"：那个单元清零（避免舍入留下极小的残量）。
+   * 返回本段耗尽的单元下标。
+   */
+  private consumePropellant(propulsion: ActivePropulsion, throttle: number, duration: number, untilDepletion: boolean): number[] {
+    const depleted: number[] = [];
+    const first = untilDepletion ? timeToFirstDepletion(propulsion, throttle) : Infinity;
+    for (const unit of propulsion.units) {
+      if (unit.propellantMass <= 0) continue;
+      const flow = unitMassFlow(unit, throttle);
+      const exhausted = unit.propellantMass - flow * duration <= 1e-9 || (untilDepletion && Math.abs(unit.propellantMass / flow - first) <= 1e-9);
+      const remaining = exhausted ? 0 : unit.propellantMass - flow * duration;
+      if (propulsion.source === 'stage') {
+        const state = this.cfg.stages[unit.stageIndex];
+        if (state) state.propellantMass = remaining;
+      } else {
+        this.cfg.payloadPropellantMass = remaining;
+      }
+      if (exhausted) depleted.push(unit.stageIndex);
     }
+    return depleted;
   }
 
   /** 构型或推进剂变化后，刷新质量、质心、高度与气动特性。 */

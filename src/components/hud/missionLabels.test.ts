@@ -35,7 +35,7 @@ describe('English mission progress', () => {
   it('translates orbit readings, limits, inclination, and confirmation countdown', () => {
     const high: Telemetry = { ...telemetry, orbit: { ...telemetry.orbit!, apoapsisAltitude: 812_000 } };
     const holding = { ...createMissionState(mission), orbitHoldSince: telemetry.simTime - 3 };
-    expect(objectiveProgress(spec, 'pending', high, null, holding, 'en')).toBe('Periapsis 200 / 150 km · Apoapsis 812 km (max 600) · Inclination 28.5° / 51.6° · Confirming 7 s');
+    expect(objectiveProgress(spec, 'pending', high, null, holding, 'en')).toBe('Periapsis 200 / 150 km · Apoapsis 812 km (max 600) · Inclination 46.0° / 51.6° · Confirming 7 s');
     expect(objectiveProgress(spec, 'pending', { ...high, orbit: { ...high.orbit!, apoapsisAltitude: Infinity } }, null, null, 'en')).toContain('Escape trajectory');
     expect(objectiveProgress(spec, 'pending', null, null, null, 'en')).toBe('Periapsis ≥ 150 km');
     expect(objectiveProgress({ kind: 'orbit', minPeriapsis: 150_000, maxApoapsis: 600_000 }, 'pending', telemetry, null, null, 'en')).toBe('Periapsis 200 / 150 km');

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { LAUNCH_SITES, getLaunchSiteOrDefault, launchSiteGeodetic } from '@/data/launchSites';
-import { getVehicleOrDefault } from '@/data/vehicles';
+import { referenceVehicleById } from '@/data/testing/referenceVehicles';
 import { EARTH, STANDARD_GRAVITY } from '../physics/constants';
 import { julianDateForLocalSolarTime } from '../physics/ephemeris/time';
 import { ecefToGeodetic, eciToEcef } from '../physics/frames/frames';
@@ -15,21 +15,21 @@ import type { SimulationConfig } from './types';
 const epochJulianDate = julianDateForLocalSolarTime(2026, 4, 12, 9.5, 0);
 
 const orbitConfig = (vehicleId: string, siteId: string): SimulationConfig => {
-  const vehicle = getVehicleOrDefault(vehicleId);
+  const vehicle = referenceVehicleById(vehicleId);
   const site = launchSiteGeodetic(getLaunchSiteOrDefault(siteId));
   return { vehicle, site, epochJulianDate, initialState: orbitStartState(vehicle, site, epochJulianDate) };
 };
 
 describe('从近地轨道开始', () => {
   it('只有能入轨的多级火箭可以从轨道开始', () => {
-    expect(canStartInOrbit(getVehicleOrDefault('frontier-1'))).toBe(true);
-    expect(canStartInOrbit(getVehicleOrDefault('zenith-3'))).toBe(true);
+    expect(canStartInOrbit(referenceVehicleById('frontier-1'))).toBe(true);
+    expect(canStartInOrbit(referenceVehicleById('zenith-3'))).toBe(true);
     // 流星-S 是单级亚轨道火箭
-    expect(canStartInOrbit(getVehicleOrDefault('meteor-s'))).toBe(false);
+    expect(canStartInOrbit(referenceVehicleById('meteor-s'))).toBe(false);
   });
 
   it('初始状态是发射场正上方 200 km 的圆轨道，向正东飞行：倾角等于发射场纬度', () => {
-    const vehicle = getVehicleOrDefault('frontier-1');
+    const vehicle = referenceVehicleById('frontier-1');
     for (const launchSite of LAUNCH_SITES) {
       const site = launchSiteGeodetic(launchSite);
       const state = orbitStartState(vehicle, site, epochJulianDate);
@@ -60,7 +60,7 @@ describe('从近地轨道开始', () => {
   });
 
   it('姿态：头部朝前（顺行），机体 −Z 朝天', () => {
-    const state = orbitStartState(getVehicleOrDefault('frontier-1'), launchSiteGeodetic(getLaunchSiteOrDefault('kourou')), epochJulianDate);
+    const state = orbitStartState(referenceVehicleById('frontier-1'), launchSiteGeodetic(getLaunchSiteOrDefault('kourou')), epochJulianDate);
     const nose = rotate(state.attitude!, vec3(1, 0, 0));
     const bodyZ = rotate(state.attitude!, vec3(0, 0, 1));
     expect(dot(nose, normalize(state.velocity))).toBeCloseTo(1, 12);
@@ -68,7 +68,7 @@ describe('从近地轨道开始', () => {
   });
 
   it('边疆一号：只剩二级与飞船；二级推进剂按"理想 Δv − 上升段预算"反推', () => {
-    const vehicle = getVehicleOrDefault('frontier-1');
+    const vehicle = referenceVehicleById('frontier-1');
     const sim = new Simulation(orbitConfig('frontier-1', 'cape-canaveral'));
     const state = sim.getVehicleState();
     expect(sim.flightPhase).toBe('flight');

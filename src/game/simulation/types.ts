@@ -126,6 +126,8 @@ export interface DebrisState {
   readonly stageIndex: number;
   /** kind 为 'fairing' 时：+1 / −1 表示两个半罩；否则为 0。 */
   readonly half: -1 | 0 | 1;
+  /** 并联助推器组中的第几个助推器（kind 为 'stage' 且该级是并联助推器组时）；其余为 0。 */
+  readonly unit: number;
   /** 质心（整流罩为几何中心）位置 [m]，ECI。 */
   readonly position: Vec3;
   /** 速度 [m/s]，ECI。 */

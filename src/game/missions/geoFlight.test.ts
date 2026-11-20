@@ -19,7 +19,7 @@ it('测试驾驶员完成从发射到 GEO 卫星部署的全部流程', () => {
   const mission = findMission('geo-deployment')!;
   const config = createFlightConfig(getVehicleOrDefault(mission.vehicleId), launchSiteGeodetic(getLaunchSiteOrDefault(mission.siteId)));
   const sim = new Simulation(config);
-  const ascent = new HandFlownPilot(sim, config, { targetAltitude: 200_000, kickAngleDeg: 1 });
+  const ascent = new HandFlownPilot(sim, config, { targetAltitude: 200_000, kickAngleDeg: 1, kickSpeed: 100, maxGLoad: 5, pitchStepDeg: 2, decisionInterval: 2 });
   const read = () => ({
     telemetry: deriveTelemetry(buildSnapshot(sim, { seq: 0, timeWarp: 1, paused: false, simRate: 1 }), config),
     stats: sim.flightStats,

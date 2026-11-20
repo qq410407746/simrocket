@@ -46,6 +46,9 @@ export const flightHint = (t: Telemetry | null, vehicle: VehicleDefinition, lang
   ) {
     return { text: tr(`已在轨道上。按 空格 启动${stageName}发动机，再用 Z / ↑ 给推力；按 M 查看轨道地图`, `Already in orbit. Press Space to enable the ${stageName} engine, then Z / ↑ for thrust; press M for the orbit map`), tone: 'info' };
   }
+  if (stage?.parallel && (t.stagePropellant[t.activeStageIndex] ?? 0) <= 0) {
+    return { text: tr(`${stageName}已烧完：按 空格 抛掉，芯级继续工作`, `${stageName} burned out: press Space to jettison them; the core stage keeps burning`), tone: 'warn' };
+  }
   if (stage && (t.stagePropellant[t.activeStageIndex] ?? 0) <= 0) {
     return { text: tr(`${stageName}推进剂耗尽：按 空格 分离`, `${stageName} propellant depleted: press Space to separate`), tone: 'warn' };
   }
@@ -120,9 +123,19 @@ export const flightHint = (t: Telemetry | null, vehicle: VehicleDefinition, lang
       tone: 'info',
     };
   }
+  // 上升段过载过高、发动机又能节流（例如 RD-180 可以收到 47%）：提示收节流
+  if (stage && t.thrust > 0 && t.gLoad > 5 && stage.engine.minThrottle < 1 && t.throttle > stage.engine.minThrottle + 0.01 && t.altitude > 20_000) {
+    const minimum = formatNumber(stage.engine.minThrottle * 100, 0);
+    return { text: tr(`过载 ${formatNumber(t.gLoad, 1)} g：按 ↓ 收小节流（${stageName}最低 ${minimum}%）`, `G-load ${formatNumber(t.gLoad, 1)} g: press ↓ to throttle down (${stageName} minimum ${minimum}%)`), tone: 'info' };
+  }
   if (t.ignited && t.throttle <= 0 && stage) return { text: tr('发动机已关机：按 Z 或 ↑ 恢复推力', 'Engine shut down: press Z or ↑ to restore thrust'), tone: 'info' };
   if (t.altitude < 20_000 && t.verticalSpeed < -20) return { text: tr('正在下降，高度不足', 'Descending with insufficient altitude'), tone: 'warn' };
-  if (t.missionTime !== null && t.missionTime < 12 && t.pitch > 1.55) {
+  // 推重比低的火箭（例如宇宙神 V 401，约 1.2）要晚一些、轻一些地倾斜，否则重力把轨迹压得太平
+  const sluggish = t.activeStageIndex === 0 && t.thrustToWeight > 0 && t.thrustToWeight < 1.3;
+  if (sluggish && t.missionTime !== null && t.missionTime < 45 && t.pitch > 1.55) {
+    return { text: tr('推重比低：速度达到约 100 m/s 后，按住 D 向东倾斜约 1°（俯仰读数 89°）', 'Low thrust-to-weight: at about 100 m/s, hold D to tilt east by about 1° (pitch reading 89°)'), tone: 'info' };
+  }
+  if (!sluggish && t.missionTime !== null && t.missionTime < 12 && t.pitch > 1.55) {
     return { text: tr('速度达到约 60 m/s 后，按住 D 向东倾斜 2–3°（俯仰读数 87–88°）', 'At about 60 m/s, hold D to tilt east by 2–3° (pitch reading 87–88°)'), tone: 'info' };
   }
   // 已经开始转弯、仍在稠密大气内、还在手动：把重力转弯交给顺行保持

@@ -70,7 +70,7 @@ test('English flight controls, events, failure result and saved logbook work end
   await page.goto('/');
   await page.getByTestId('language-en').click();
   await page.getByTestId('tab-sandbox').click();
-  await page.getByTestId('vehicle-meteor-s').click();
+  await page.getByTestId('vehicle-mercury-redstone').click();
   await page.getByTestId('enter-flight').click();
   await expect(page.getByTestId('readout-altitude')).toContainText('Altitude');
   await expect(page.getByTestId('flight-hint')).toContainText('Space');
@@ -88,7 +88,7 @@ test('English flight controls, events, failure result and saved logbook work end
   await expectEnglishPage(page);
   await page.getByTestId('summary-menu').click();
   await page.getByTestId('tab-logbook').click();
-  await expect(page.getByTestId('logbook-entry').first()).toContainText('Meteor-S');
+  await expect(page.getByTestId('logbook-entry').first()).toContainText('Mercury-Redstone');
   await expect(page.getByTestId('logbook-entry').first()).toContainText('Ground impact');
   await expectEnglishPage(page);
   expect(problems).toEqual([]);

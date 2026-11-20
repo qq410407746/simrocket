@@ -18,7 +18,7 @@ export interface EngineDefinition extends EnginePerformanceParams {
   readonly id: string;
   readonly name: string;
   /** 推进剂组合（仅用于显示与尾焰外观）。 */
-  readonly propellant: 'kerolox' | 'hydrolox' | 'hypergolic';
+  readonly propellant: 'kerolox' | 'alcolox' | 'hydrolox' | 'hypergolic';
   /** 最小节流系数 (0–1]；低于该值发动机无法稳定工作。 */
   readonly minThrottle: number;
   /** 推力矢量最大摆角 [rad]。阶段二姿态控制使用。 */
@@ -66,6 +66,14 @@ export interface StageDefinition {
     readonly side: ThermalSurfaceProperties;
     readonly base: ThermalSurfaceProperties;
   };
+  /**
+   * 并联助推器组（例如联盟号的四个捆绑助推器）：
+   * 绑在上面一级（芯级）的周围，底面与芯级底面齐平，与芯级同时点火、同时工作，可以先于芯级分离。
+   * 此时 dryMass、propellantMass、engineCount 都是整组的合计；geometry、aero 描述单个助推器；
+   * count 为助推器个数（决定外形、分离体个数，以及整组的迎风面积）。
+   * 不填表示串联级：叠在下面一级的顶上，下面一级分离后才能点火。
+   */
+  readonly parallel?: { readonly count: number };
 }
 
 /** 防热大底：返回舱底部的钝头防热结构。 */

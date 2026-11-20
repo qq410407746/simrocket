@@ -7,12 +7,16 @@ export interface StageModule {
   readonly label: string;
   readonly stage: StageDefinition;
   readonly structure: StructuralLimits;
+  /** 来源：原型火箭的标识，以及该模块在原型中的位置（自下而上的下标）。原配的上下两级之间有真实的级间段。 */
+  readonly origin: { readonly vehicleId: string; readonly position: number };
 }
 export interface PayloadModule {
   readonly id: string;
   readonly payload: PayloadDefinition;
   /** 原生安装接口直径，不等同于整流罩最大直径。 */
   readonly mountingDiameter: number;
+  /** 来源：原型火箭的标识，以及原型中最上面一级的位置。 */
+  readonly origin: { readonly vehicleId: string; readonly position: number };
 }
 export interface DesignParts {
   readonly stages: readonly StageModule[];
@@ -47,13 +51,29 @@ export function compileDesign(value: unknown, parts: DesignParts): { vehicle: Ve
   if (!d) return { vehicle: null, errors: ['图纸格式无效，或引用了不存在的模块。'], warnings: [] };
   const modules = d.stages.map((id) => parts.stages.find((p) => p.id === id)!);
   const payload = parts.payloads.find((p) => p.id === d.payload)!;
-  const diameters = [...modules.map((p) => p.stage.geometry.diameter), payload.mountingDiameter];
-  if (diameters.some((diameter) => Math.abs(diameter - diameters[0]!) > 1e-6)) {
-    return { vehicle: null, errors: ['模块接口直径不同；尚未提供转接结构，请选择接口相同的推进级与载荷。'], warnings: [] };
+  // 相邻两个模块：在原型里本来就是上下相接的（有真实的级间段 / 载荷适配器），或者接口直径相同。
+  const native = (lower: StageModule, upper: { readonly origin: StageModule['origin'] }): boolean =>
+    lower.origin.vehicleId === upper.origin.vehicleId && upper.origin.position === lower.origin.position + 1;
+  // 并联助推器只能绑在原配的芯级周围（先检查，给出更明确的原因）
+  const strapOnMisplaced = modules.some((module, i) => module.stage.parallel && !(modules[i + 1] && native(module, modules[i + 1]!)));
+  if (strapOnMisplaced) {
+    return { vehicle: null, errors: ['并联助推器只能放在它原配的芯级下面（不能单独使用，也不能放在最上面）。'], warnings: [] };
+  }
+  let allNative = true;
+  for (let i = 0; i < modules.length; i++) {
+    const lower = modules[i]!;
+    const upperStage = modules[i + 1];
+    if (lower.stage.parallel) continue;
+    const isNative = native(lower, upperStage ?? payload);
+    const upperDiameter = upperStage ? upperStage.stage.geometry.diameter : payload.mountingDiameter;
+    if (!isNative && Math.abs(lower.stage.geometry.diameter - upperDiameter) > 1e-6) {
+      return { vehicle: null, errors: ['模块接口直径不同；尚未提供转接结构，请选择接口相同的推进级与载荷。'], warnings: [] };
+    }
+    if (!isNative) allNative = false;
   }
   const vehicle: VehicleDefinition = {
     id: d.id, name: d.name, nameZh: d.name, role: '自定义火箭',
-    description: '由现有完整模块组成的串联火箭。理想性能不保证入轨，实际飞行受气动、热与结构限制。',
+    description: '由现有完整模块组成的火箭。理想性能不保证入轨，实际飞行受气动、热与结构限制。',
     stages: modules.map((p, i) => ({ ...structuredClone(p.stage), id: `${d.id}-${i}`, name: `第${i + 1}级（${p.label}）` })),
     payload: structuredClone(payload.payload),
     structure: {
@@ -64,7 +84,7 @@ export function compileDesign(value: unknown, parts: DesignParts): { vehicle: Ve
   };
   const perf = analyzeVehicle(vehicle);
   const warnings = perf.liftoffTwr <= 1 ? ['海平面推重比不超过1，满推力也无法从发射台起飞。'] : [];
-  if (vehicle.stages.length > 3) warnings.push('四级构型尚无任务驾驶基准，请通过自由飞行验证。');
+  if (vehicle.stages.length > 3 && !allNative) warnings.push('四级构型尚无任务驾驶基准，请通过自由飞行验证。');
   return { vehicle, errors: [], warnings };
 }
 

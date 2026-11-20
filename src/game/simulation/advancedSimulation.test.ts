@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { getVehicleOrDefault } from '@/data/vehicles';
+import { referenceVehicleById } from '@/data/testing/referenceVehicles';
 import { EARTH, STANDARD_GRAVITY } from '../physics/constants';
 import { vec3, distance, add, scale, length, sub } from '../physics/math/vec3';
 import { elementsFromState, stateFromElements } from '../physics/orbital/elements';
@@ -10,7 +10,7 @@ import { SimulationHost } from './SimulationHost';
 import { buildSnapshot } from './snapshot';
 import { interpolateMotion } from './interpolation';
 import type { SimulationConfig, SimSnapshot } from './types';
-const config = (): SimulationConfig => ({ vehicle: getVehicleOrDefault('zenith-3'), site: { latitude: 0, longitude: 0, altitude: 0 }, epochJulianDate: 2451545,
+const config = (): SimulationConfig => ({ vehicle: referenceVehicleById('zenith-3'), site: { latitude: 0, longitude: 0, altitude: 0 }, epochJulianDate: 2451545,
  initialState: { position: vec3(SYNCHRONOUS_RADIUS,0,0), velocity: vec3(0,Math.sqrt(EARTH.MU / SYNCHRONOUS_RADIUS),0), separatedStages: 2, fairingJettisoned: true } });
 const meta = { seq: 0, timeWarp: 100000 as const, paused: false, simRate: 100000 };
 describe('解析滑行与机动指令', () => {

@@ -5,7 +5,8 @@
 import { describe, expect, it } from 'vitest';
 import { findLaunchSite, getLaunchSiteOrDefault, launchSiteGeodetic } from '@/data/launchSites';
 import { MISSION_CATALOG, findMission } from '@/data/missions';
-import { findVehicle, getVehicleOrDefault } from '@/data/vehicles';
+import { findVehicle } from '@/data/vehicles';
+import { referenceVehicleById } from '@/data/testing/referenceVehicles';
 import { DEG2RAD, RAD2DEG } from '../physics/constants';
 import { reachableInclination } from '../physics/orbital/launch';
 import { Simulation } from '../simulation/Simulation';
@@ -31,7 +32,8 @@ import {
 import type { MissionDefinition, MissionScore, MissionState } from './types';
 
 const mission = (id: string): MissionDefinition => findMission(id) as MissionDefinition;
-const frontier = getVehicleOrDefault('frontier-1');
+/** 任务判定只看遥测：用固定的参考构型生成一份真实的在轨遥测。 */
+const frontier = referenceVehicleById('frontier-1');
 const cape = launchSiteGeodetic(getLaunchSiteOrDefault('cape-canaveral'));
 
 /** 从轨道出发的边疆一号的真实遥测：200 km 圆轨道，二级还连着，发动机关着。 */
@@ -337,25 +339,24 @@ describe('评分', () => {
     scoreMission(firstOrbit, state, missionMetrics(firstOrbit, state, input(at(460), { maxGLoad })));
 
   it('首次入轨：各项得分按指标线性换算，总分四舍五入', () => {
-    // 粗糙的飞行：150 × 221 km，剩余 3037 m/s，最大过载 6.25 g
-    const rough = scoreOf(confirmed(71, 3_037), 6.25);
-    expect(rough.items.map((i) => i.id)).toEqual(['objectives', 'circular', 'margin', 'g']);
+    // 粗糙的飞行：150 × 221 km，剩余 229 m/s
+    const rough = scoreOf(confirmed(71, 229), 4.4);
+    expect(rough.items.map((i) => i.id)).toEqual(['objectives', 'circular', 'margin']);
     const points = Object.fromEntries(rough.items.map((i) => [i.id, i.points]));
-    expect(points.objectives).toBe(50);
+    expect(points.objectives).toBe(55);
     expect(points.circular).toBeCloseTo((20 * (300 - 71)) / 280, 9);
-    expect(points.margin).toBe(15);
-    expect(points.g).toBeCloseTo(15 * 0.5, 9);
-    expect(rough.total).toBe(89);
+    expect(points.margin).toBeCloseTo((25 * (229 - 100)) / 230, 9);
+    expect(rough.total).toBe(85);
     expect(rough.grade).toBe('A');
-    expect(rough.items.find((i) => i.id === 'g')).toMatchObject({ metric: 'max-g', value: 6.25, weight: 15 });
+    expect(rough.items.find((i) => i.id === 'margin')).toMatchObject({ metric: 'delta-v-margin', value: 229, weight: 25 });
     expect(rough.items.find((i) => i.id === 'objectives')).toMatchObject({ metric: null, value: null, fraction: 1 });
-    // 收了节流、轨道更圆：满分
-    const clean = scoreOf(confirmed(15, 3_050), 4.6);
+    // 轨道更圆、只靠第三级入轨：满分
+    const clean = scoreOf(confirmed(15, 340), 4.4);
     expect(clean.total).toBe(100);
     expect(clean.grade).toBe('S');
-    // 勉强入轨：很椭圆、余量少、过载大
-    const poor = scoreOf(confirmed(440, 1_400), 8);
-    expect(poor.total).toBe(50);
+    // 勉强入轨：很椭圆、动用了飞船的推进剂
+    const poor = scoreOf(confirmed(440, 90), 4.4);
+    expect(poor.total).toBe(55);
     expect(poor.grade).toBe('C');
   });
 
@@ -364,9 +365,9 @@ describe('评分', () => {
     const score = scoreMission(firstOrbit, active, missionMetrics(firstOrbit, active, input(at(100), { maxGLoad: 3 })));
     expect(score.total).toBe(0);
     expect(score.grade).toBe('F');
-    expect(score.items).toHaveLength(4);
+    expect(score.items).toHaveLength(3);
     expect(score.items.find((i) => i.id === 'objectives')?.fraction).toBe(0);
-    expect(score.items.find((i) => i.id === 'g')?.fraction).toBe(1);
+    expect(score.items.find((i) => i.id === 'margin')?.fraction).toBe(0);
   });
 
   it('附加目标作为单独的评分项', () => {

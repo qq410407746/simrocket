@@ -92,6 +92,17 @@ const stageAction = (t: Telemetry | null, vehicle: VehicleDefinition, language: 
     const name = dataText(stage.name, language);
     return { label: tr(`启动${stage.name}`, `Start ${name}`), hint: tr(`启用${stage.name}发动机（空格）；推力大小由节流阀决定`, `Enable ${name} engines (Space); thrust is set by the throttle`), enabled: true, tone: 'go' };
   }
+  if (stage?.parallel) {
+    // 并联助推器：抛掉后芯级继续工作，不重新点火
+    const core = vehicle.stages[t.activeStageIndex + 1];
+    const coreName = core ? dataText(core.name, language) : '';
+    return {
+      label: tr('抛掉助推器', 'Jettison boosters'),
+      hint: tr(`抛掉${stage.name}（空格）；${core ? `${core.name}继续工作` : ''}`, `Jettison ${dataText(stage.name, language)} (Space)${core ? `; ${coreName} keeps burning` : ''}`),
+      enabled: true,
+      tone: (t.stagePropellant[t.activeStageIndex] ?? 0) <= 0 ? 'go' : 'normal',
+    };
+  }
   if (stage) {
     const next = vehicle.stages[t.activeStageIndex + 1];
     const name = dataText(stage.name, language);
