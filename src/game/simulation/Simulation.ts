@@ -130,6 +130,11 @@ export const ATTITUDE_CONTROL: AttitudeControlParams = {
 
 /** 级间分离机构给出的相对分离速度 [m/s]。 */
 const STAGE_SEPARATION_SPEED = 1.5;
+/**
+ * 卫星与上面级分离（部署）时的相对速度 [m/s]。卫星靠分离弹簧推开，比级间分离慢得多
+ * （估算：弹簧分离装置的典型量级为零点几米每秒）。
+ */
+const SATELLITE_SEPARATION_SPEED = 0.5;
 /** 并联助推器分离时的径向分离速度 [m/s]（量级估计）。 */
 const BOOSTER_SEPARATION_SPEED = 2;
 
@@ -1505,10 +1510,12 @@ export class Simulation {
     this.refreshConfiguration();
     this.refreshStructure();
 
-    // 动量守恒的分离冲量：两者沿箭体轴线以 STAGE_SEPARATION_SPEED 的相对速度分开。
+    // 动量守恒的分离冲量：两者沿箭体轴线以给定的相对速度分开（部署卫星时用弹簧分离的较小速度）。
+    const deploying = this.vehicle.payload.kind === 'satellite' && index === this.vehicle.stages.length - 1;
+    const separationSpeed = deploying ? SATELLITE_SEPARATION_SPEED : STAGE_SEPARATION_SPEED;
     const total = this.mass + dropped.mass;
-    const vehicleKick = (STAGE_SEPARATION_SPEED * dropped.mass) / total;
-    const debrisKick = (-STAGE_SEPARATION_SPEED * this.mass) / total;
+    const vehicleKick = (separationSpeed * dropped.mass) / total;
+    const debrisKick = (-separationSpeed * this.mass) / total;
 
     const lateralArea = stage.geometry.diameter * stage.geometry.length;
     const dragArea = 0.5 * stage.aero.dragCoefficient * stage.aero.referenceArea + 0.5 * CROSS_FLOW_DRAG_COEFFICIENT * lateralArea;

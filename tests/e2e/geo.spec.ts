@@ -11,10 +11,13 @@ interface GeoDebugApi {
       stagePropellant: number[]; fairingAttached: boolean; attitudeMode: string; throttle: number;
       satelliteDeployedAt: number | null;
       synchronous: { geo: boolean; gso: boolean; periodError: number | null; longitudeSpan: number | null };
-      orbit: { periapsisAltitude: number; apoapsisAltitude: number; inclination: number } | null;
+      orbit: { periapsisAltitude: number; apoapsisAltitude: number; inclination: number; period: number; timeToApoapsis: number; timeToPeriapsis: number } | null;
     } | null;
   };
-  snapshot(): { maneuver?: { node: { time: number }; remaining: { x: number; y: number; z: number } } | null } | null;
+  snapshot(): {
+    maneuver?: { node: { time: number }; remaining: { x: number; y: number; z: number } } | null;
+    vehicle: { body: { attitude: { x: number; y: number; z: number; w: number }; velocity: { x: number; y: number; z: number } } };
+  } | null;
 }
 type GeoWindow = Window & { __orbitalFrontier: GeoDebugApi };
 
@@ -95,7 +98,7 @@ test('从发射台规划并执行 GTO、远地点圆化、部署卫星并确认 
       if (down) held.add('ArrowDown'); else held.delete('ArrowDown');
     };
     let phase = 'vertical', settledAt = 0, pitchTarget = 90, nextDecision = 0;
-    let lastTime = -1, lastAction = -1, resumeAt = 0, duration = 0, started = false, maneuvers = 0, fine = false;
+    let lastTime = -1, lastAction = -1, resumeAt = 0, duration = 0, started = false, maneuvers = 0, fine = false, preferCircular = false, lastPulse = -1;
     let lastReport = '', lastWall = 0;
     const timer = setInterval(() => {
       const state = api.sim(), t = state.telemetry, snapshot = api.snapshot();
@@ -103,8 +106,8 @@ test('从发射台规划并执行 GTO、远地点圆化、部署卫星并确认 
       lastTime = t.simTime;
       const pending = state.mission?.objectives.find((o) => o.status === 'pending')?.id;
       const report = `${phase}/${pending}`;
-      if (report !== lastReport || Date.now() - lastWall > 60_000) {
-        console.log('飞行验收：' + JSON.stringify({ phase, pending, time: t.simTime, altitude: t.altitude, pitch: t.pitch * 180 / Math.PI, orbit: t.orbit, fuel: t.stagePropellant, node: snapshot.maneuver?.node, remaining: snapshot.maneuver?.remaining, sync: t.synchronous }));
+      if (report !== lastReport || Date.now() - lastWall > 20_000) {
+        console.log('飞行验收：' + JSON.stringify({ phase, pending, time: t.simTime, started, fine, maneuvers, mode: t.attitudeMode, throttle: t.throttle, altitude: t.altitude, pitch: t.pitch * 180 / Math.PI, orbit: t.orbit, fuel: t.stagePropellant, node: snapshot.maneuver?.node, remaining: snapshot.maneuver?.remaining, sync: t.synchronous }));
         lastReport = report; lastWall = Date.now();
       }
       if (state.mission?.status !== 'active' || (t.phase !== 'flight' && t.phase !== 'prelaunch')) {
@@ -144,8 +147,32 @@ test('从发射台规划并执行 GTO、远地点圆化、部署卫星并确认 
       const details = document.querySelector<HTMLDetailsElement>('[data-testid="maneuver-panel"]');
       if (details && !details.open) details.querySelector('summary')?.click();
       if (t.simTime < resumeAt || pending === 'parking') { warp(5); return; }
-      if (pending === 'deploy') { warp(1); click('deploy-satellite'); return; }
-      if (pending === 'confirm' || (!snapshot.maneuver && t.synchronous?.geo)) { warp(5); return; }
+      // 部署前先把周期误差修到 60 s 以内：卫星分离冲量会让周期再变化一些，而卫星没有发动机
+      const needsTrim = Math.abs(t.synchronous?.periodError ?? 0) > 60;
+      if (pending === 'deploy' && !needsTrim && !snapshot.maneuver) { warp(1); click('deploy-satellite'); return; }
+      if (pending === 'confirm' || (!snapshot.maneuver && t.synchronous?.geo && !needsTrim)) { warp(5); return; }
+      // 周期精修：轨道已在赤道面内、偏心率在 GEO 容许范围附近时，不再用机动草案（草案不以周期为目标），
+      // 而在拱点点短脉冲（0.02 s 约 0.5 m/s，在同步轨道上约改变周期 42 s）：
+      // 周期太长 → 在近地点逆行，降低远地点；周期太短 → 在远地点顺行，抬高近地点。两者都同时减小偏心率。
+      const SIDEREAL_DAY = 86_164.0905;
+      const orbitNow = t.orbit;
+      if ((pending === 'geo' || pending === 'deploy') && orbitNow && orbitNow.inclination <= 0.001
+        && orbitNow.apoapsisAltitude - orbitNow.periapsisAltitude < 168_000 && Math.abs(orbitNow.period - SIDEREAL_DAY) > (pending === 'deploy' ? 60 : 100)) {
+        if (snapshot.maneuver) { click('clear-maneuver'); return; }
+        const tooLong = orbitNow.period > SIDEREAL_DAY;
+        const want = tooLong ? 'retrograde' : 'prograde';
+        if (t.attitudeMode !== want) { warp(1); click(`attitude-${want}`); return; }
+        const toApsis = tooLong ? orbitNow.timeToPeriapsis : orbitNow.timeToApoapsis;
+        if (toApsis > 300) { warp(toApsis > 3_000 ? state.maxTimeWarp : 5); return; }
+        warp(1);
+        const q = snapshot.vehicle.body.attitude, v = snapshot.vehicle.body.velocity;
+        const nose = { x: 1 - 2 * (q.y * q.y + q.z * q.z), y: 2 * (q.x * q.y + q.w * q.z), z: 2 * (q.x * q.z - q.w * q.y) };
+        const along = (nose.x * v.x + nose.y * v.y + nose.z * v.z) / Math.hypot(v.x, v.y, v.z);
+        if ((tooLong ? -along : along) > 0.995 && t.throttle === 0 && t.simTime - lastPulse > 3) {
+          click('pulse-20'); lastPulse = t.simTime;
+        }
+        return;
+      }
       if (!snapshot.maneuver) {
         if (t.simTime - lastAction < 3) return;
         warp(1);
@@ -153,19 +180,24 @@ test('从发射台规划并执行 GTO、远地点圆化、部署卫星并确认 
         // 不与"远地点圆化"交替（两者交替时在同步高度上方会互相抵消，周期误差不变）
         const kind = pending === 'gto' ? 'gto' : (t.orbit?.inclination ?? 1) > 0.001 ? 'equatorial'
           : t.orbit && t.orbit.apoapsisAltitude - t.orbit.periapsisAltitude > 100_000 ? 'circular'
-          : 'synchronous';
+          : preferCircular ? 'circular' : 'synchronous';
         click(`plan-${kind}`);
         lastAction = t.simTime; started = false; fine = false; duration = 0; maneuvers++;
         if (maneuvers > 16) { clearInterval(timer); throw new Error('机动未收敛'); }
         return;
       }
       if (t.attitudeMode !== 'maneuver' && !started) click('point-maneuver');
+      const plan = snapshot.maneuver, remaining = Math.hypot(plan.remaining.x, plan.remaining.y, plan.remaining.z);
+      // 修正量可以忽略（例如一个拱点已经正好在同步高度）：清掉，下次换另一种修正
+      if (!started && remaining < 0.2) { warp(1); click('clear-maneuver'); preferCircular = !preferCircular; resumeAt = t.simTime + 20; return; }
       if (!duration) duration = Number(document.querySelector('[data-testid="maneuver-status"]')?.getAttribute('data-burn-duration') ?? 0);
       if (!duration) return;
-      const plan = snapshot.maneuver, remaining = Math.hypot(plan.remaining.x, plan.remaining.y, plan.remaining.z);
-      // 0.02 s 的短脉冲约 0.5 m/s：小于 0.2 m/s 的节点才放弃，否则照样执行
-      if (!started && remaining < 0.2) { warp(1); click('clear-maneuver'); resumeAt = t.simTime + 20; return; }
+      // 机头（机体 +X 轴）与剩余增量方向的夹角：没对准之前不点火，否则调头途中的脉冲会与之后的互相抵消
+      const q = snapshot.vehicle.body.attitude;
+      const nose = { x: 1 - 2 * (q.y * q.y + q.z * q.z), y: 2 * (q.x * q.y + q.w * q.z), z: 2 * (q.x * q.z - q.w * q.y) };
+      const aligned = remaining > 0 && (nose.x * plan.remaining.x + nose.y * plan.remaining.y + nose.z * plan.remaining.z) / remaining > 0.995;
       if (!started) {
+        if (t.simTime >= plan.node.time - duration / 2 && !aligned) { warp(1); return; }
         if (t.simTime >= plan.node.time - duration / 2) {
           warp(1); started = true;
           if (remaining < 25) { fine = true; click(remaining > 3 ? 'pulse-100' : 'pulse-20'); }
@@ -186,7 +218,7 @@ test('从发射台规划并执行 GTO、远地点圆化、部署卫星并确认 
       if (pending !== 'gto' && remaining < 25) {
         warp(1);
         if (!fine) { click('throttle-cut'); fine = true; }
-        else if (t.throttle === 0) click(remaining > 3 ? 'pulse-100' : 'pulse-20');
+        else if (t.throttle === 0 && aligned) click(remaining > 3 ? 'pulse-100' : 'pulse-20');
       }
       else warp(pending === 'gto' && remaining < 50 ? 1 : 2);
     }, 100);
