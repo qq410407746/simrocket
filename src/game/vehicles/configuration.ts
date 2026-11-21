@@ -4,11 +4,11 @@
  */
 import type { AeroProperties } from '../physics/aerodynamics/drag';
 import { trimAngleOfAttack } from '../physics/aerodynamics/trim';
-import { DEG2RAD } from '../physics/constants';
+import { DEG2RAD, STANDARD_GRAVITY } from '../physics/constants';
 import { idealDeltaV } from '../physics/propulsion/engine';
 import type { ThermalZoneId } from '../physics/thermodynamics/heating';
 import type { ThermalSurfaceProperties } from '../physics/thermodynamics/thermalZone';
-import { type MassProperties, capsuleSideAngle, computeMassProperties, payloadStackHeight } from './analysis';
+import { type MassProperties, capsuleSideAngle, computeMassProperties, parallelPhase, payloadStackHeight, stackLength } from './analysis';
 import type {
   EngineDefinition,
   LandingLimits,
@@ -56,49 +56,120 @@ export const configurationMassProperties = (vehicle: VehicleDefinition, config: 
 export const stackHeight = (vehicle: VehicleDefinition, config: ConfigurationState): number => {
   let height = 0;
   vehicle.stages.forEach((stage, i) => {
-    if (config.stages[i]?.attached) height += stage.geometry.length;
+    if (config.stages[i]?.attached) height += stackLength(stage);
   });
   const { payload } = vehicle;
   return height + (payload.kind === 'satellite' && !config.fairingAttached ? payload.geometry.length : payloadStackHeight(payload));
 };
 
+/** 是否为并联助推器组（绑在上面一级周围、与它同时工作）。 */
+export const isParallelStage = (stage: StageDefinition | undefined): boolean => (stage?.parallel?.count ?? 0) > 0;
+
+/** 一个推进单元：某一级（或载荷）的发动机与剩余推进剂。 */
+export interface PropulsionUnit {
+  /** 推进级下标；载荷发动机为 stages.length。 */
+  readonly stageIndex: number;
+  readonly engine: EngineDefinition;
+  readonly engineCount: number;
+  readonly propellantMass: number;
+}
+
 /** 当前可用的推进单元。 */
 export interface ActivePropulsion {
   /** 'stage'：某一推进级；'payload'：载荷自带发动机。 */
   readonly source: 'stage' | 'payload';
-  /** 推进级下标（source 为 'payload' 时等于 stages.length）。 */
+  /** 推进级下标（source 为 'payload' 时等于 stages.length）；并联构型为助推器组的下标。 */
   readonly stageIndex: number;
+  /**
+   * 当前工作的发动机。只有一个推进单元时就是该级的发动机；
+   * 并联构型（助推器 + 芯级）为各单元的合成：推力与喷管出口面积相加，比冲按总推力 / 总质量流量折算。
+   */
   readonly engine: EngineDefinition;
   readonly engineCount: number;
-  /** 该单元剩余推进剂 [kg]。 */
+  /** 所有单元剩余推进剂之和 [kg]。 */
   readonly propellantMass: number;
+  /** 同时工作的推进单元（串联构型只有一个）。各单元按自己的质量流量消耗自己的推进剂。 */
+  readonly units: readonly PropulsionUnit[];
 }
 
+const stageUnit = (vehicle: VehicleDefinition, config: ConfigurationState, index: number): PropulsionUnit => {
+  const stage = vehicle.stages[index] as StageDefinition;
+  return { stageIndex: index, engine: stage.engine, engineCount: stage.engineCount, propellantMass: config.stages[index]?.propellantMass ?? 0 };
+};
+
 /**
- * 当前由谁提供推力：仍连接的最低一级；各级都已分离时为载荷自带发动机（若有）。
- * 串联构型下，上面的级被下面的级挡住，不能提前点火。
+ * 几个同时工作的推进单元合成一台等效发动机（engineCount = 1）：
+ *   F_vac = Σ F_i·n_i，A_e = Σ A_i·n_i（环境压力损失 p·A_e 因此正确相加），
+ *   ṁ = Σ F_i·n_i /(g₀·Isp_i)，等效 Isp = F_vac /(g₀·ṁ)。
+ * 节流：同一个指令作用于所有单元，最低节流取各单元中最高的那个；摆动范围取最小的。
+ */
+export const combineEngines = (units: readonly PropulsionUnit[]): EngineDefinition => {
+  let thrust = 0;
+  let exitArea = 0;
+  let weightFlow = 0;
+  let minThrottle = 0;
+  let gimbal = Infinity;
+  for (const u of units) {
+    thrust += u.engine.thrustVacuum * u.engineCount;
+    exitArea += u.engine.nozzleExitArea * u.engineCount;
+    weightFlow += (u.engine.thrustVacuum * u.engineCount) / u.engine.ispVacuum;
+    minThrottle = Math.max(minThrottle, u.engine.minThrottle);
+    gimbal = Math.min(gimbal, u.engine.gimbalRange);
+  }
+  const first = units[0] as PropulsionUnit;
+  return {
+    id: units.map((u) => u.engine.id).join('+'),
+    name: units.map((u) => (u.engineCount > 1 ? `${u.engine.name} ×${u.engineCount}` : u.engine.name)).join(' + '),
+    propellant: first.engine.propellant,
+    thrustVacuum: thrust,
+    ispVacuum: weightFlow > 0 ? thrust / weightFlow : first.engine.ispVacuum,
+    nozzleExitArea: exitArea,
+    minThrottle,
+    gimbalRange: Number.isFinite(gimbal) ? gimbal : 0,
+  };
+};
+
+/**
+ * 当前由谁提供推力：仍连接的最低一级；它是并联助推器组时，上面的芯级同时工作。
+ * 各级都已分离时为载荷自带发动机（若有）。串联构型下，上面的级被下面的级挡住，不能提前点火。
  */
 export const activePropulsion = (vehicle: VehicleDefinition, config: ConfigurationState): ActivePropulsion | null => {
   const index = lowestAttachedStage(config);
   const stage = vehicle.stages[index];
   if (stage) {
-    return {
-      source: 'stage',
-      stageIndex: index,
-      engine: stage.engine,
-      engineCount: stage.engineCount,
-      propellantMass: config.stages[index]?.propellantMass ?? 0,
-    };
+    const units = [stageUnit(vehicle, config, index)];
+    if (isParallelStage(stage) && vehicle.stages[index + 1] && config.stages[index + 1]?.attached) units.push(stageUnit(vehicle, config, index + 1));
+    const propellantMass = units.reduce((sum, u) => sum + u.propellantMass, 0);
+    if (units.length === 1) {
+      return { source: 'stage', stageIndex: index, engine: stage.engine, engineCount: stage.engineCount, propellantMass, units };
+    }
+    const fueled = units.filter((u) => u.propellantMass > 0);
+    return { source: 'stage', stageIndex: index, engine: combineEngines(fueled.length > 0 ? fueled : units), engineCount: 1, propellantMass, units };
   }
   const { payload } = vehicle;
   if (!payload.engine || payload.engineCount <= 0) return null;
-  return {
-    source: 'payload',
+  const unit: PropulsionUnit = {
     stageIndex: vehicle.stages.length,
     engine: payload.engine,
     engineCount: payload.engineCount,
     propellantMass: config.payloadPropellantMass,
   };
+  return { source: 'payload', stageIndex: unit.stageIndex, engine: unit.engine, engineCount: unit.engineCount, propellantMass: unit.propellantMass, units: [unit] };
+};
+
+/** 单元在节流 throttle 下的质量流量 [kg/s]。 */
+export const unitMassFlow = (unit: PropulsionUnit, throttle: number): number =>
+  (throttle * unit.engine.thrustVacuum * unit.engineCount) / (STANDARD_GRAVITY * unit.engine.ispVacuum);
+
+/** 在节流 throttle 下，第一个推进单元烧完所需的时间 [s]；没有推进剂时为 0。 */
+export const timeToFirstDepletion = (propulsion: ActivePropulsion, throttle: number): number => {
+  let time = Infinity;
+  for (const u of propulsion.units) {
+    if (u.propellantMass <= 0) continue;
+    const flow = unitMassFlow(u, throttle);
+    if (flow > 0) time = Math.min(time, u.propellantMass / flow);
+  }
+  return Number.isFinite(time) ? time : 0;
 };
 
 /**
@@ -116,10 +187,18 @@ export const configurationAero = (vehicle: VehicleDefinition, config: Configurat
   let lateralArea = fairing
     ? fairing.geometry.diameter * fairing.geometry.length
     : payload.geometry.diameter * payload.geometry.length;
+  // 并联助推器组：迎风面积与侧向面积按个数累加到芯级上
+  let strapOnArea = 0;
   vehicle.stages.forEach((stage, i) => {
     if (!config.stages[i]?.attached) return;
-    referenceArea = Math.max(referenceArea, stage.aero.referenceArea);
-    lateralArea += stage.geometry.diameter * stage.geometry.length;
+    const count = stage.parallel?.count ?? 1;
+    lateralArea += count * stage.geometry.diameter * stage.geometry.length;
+    if (isParallelStage(stage)) {
+      strapOnArea += count * stage.aero.referenceArea;
+      return;
+    }
+    referenceArea = Math.max(referenceArea, stage.aero.referenceArea + strapOnArea);
+    strapOnArea = 0;
   });
 
   const source = lowest ? lowest.aero : payload.aero;
@@ -141,12 +220,27 @@ export const remainingDeltaV = (vehicle: VehicleDefinition, config: Configuratio
   let fairingMass = payload.kind === 'satellite' && config.fairingAttached ? payload.fairing.mass : 0;
   let deltaV = 0;
   const first = lowestAttachedStage(config);
+  /** 并联段里芯级已经烧掉的推进剂 [kg]。 */
+  let preburned = 0;
   for (let i = first; i < vehicle.stages.length; i++) {
     const stage = vehicle.stages[i] as StageDefinition;
     const state = config.stages[i];
     if (!state?.attached) continue;
-    deltaV += idealDeltaV(stage.engine.ispVacuum, mass, mass - state.propellantMass);
-    mass -= stage.dryMass + state.propellantMass;
+    const core = vehicle.stages[i + 1];
+    const coreState = config.stages[i + 1];
+    if (isParallelStage(stage) && core && coreState?.attached) {
+      // 助推器与芯级同时烧到其中一个耗尽（合成比冲），然后抛掉助推器
+      const phase = parallelPhase(stage, core, state.propellantMass, coreState.propellantMass);
+      const burned = phase.burnedBooster + phase.burnedCore;
+      deltaV += idealDeltaV(phase.ispVacuum, mass, mass - burned);
+      mass -= burned + stage.dryMass + (state.propellantMass - phase.burnedBooster);
+      preburned = phase.burnedCore;
+      continue;
+    }
+    const propellant = Math.max(0, state.propellantMass - preburned);
+    preburned = 0;
+    deltaV += idealDeltaV(stage.engine.ispVacuum, mass, mass - propellant);
+    mass -= stage.dryMass + propellant;
     if (fairingMass > 0 && i < vehicle.stages.length - 1) {
       mass -= fairingMass;
       fairingMass = 0;

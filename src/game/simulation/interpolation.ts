@@ -7,6 +7,7 @@
  *   - SnapshotBuffer 在相邻两个快照之间插值出该时刻的运动状态。
  * 插值只读快照，永远不会修改物理状态。
  */
+import { propagateKepler } from '../physics/orbital/kepler';
 import { type Quat, slerp } from '../physics/math/quat';
 import { type Vec3, addScaled, vec3 } from '../physics/math/vec3';
 import type { DebrisState, SimSnapshot } from './types';
@@ -90,6 +91,9 @@ export const interpolateMotion = (a: SimSnapshot, b: SimSnapshot, t: number): In
     };
   }
   const s = (t - a.simTime) / h;
+  if (b.analyticCoast && b.analyticSince != null && b.analyticSince <= a.simTime && a.vehicle.flight.thrust === 0 && s >= 0 && s <= 1) {
+    return { simTime: t, ...propagateKepler(bodyA.position, bodyA.velocity, t - a.simTime), attitude: slerp(bodyA.attitude, bodyB.attitude, s) };
+  }
   if (s <= 0) {
     return {
       simTime: t,

@@ -48,8 +48,10 @@ export const createMissionState = (mission: MissionDefinition): MissionState => 
 
 /** 轨道是否满足要求（只看轨道本身，不管发动机是否在工作）。 */
 export const orbitMeets = (orbit: OrbitTelemetry | null, requirement: OrbitRequirement): boolean => {
-  if (!orbit || orbit.classification !== 'orbit') return false;
+  if (!orbit || orbit.classification !== 'orbit' || ![orbit.periapsisAltitude, orbit.apoapsisAltitude, orbit.inclination].every(Number.isFinite)) return false;
   if (orbit.periapsisAltitude < requirement.minPeriapsis || orbit.apoapsisAltitude > requirement.maxApoapsis) return false;
+  if (requirement.minApoapsis !== undefined && orbit.apoapsisAltitude < requirement.minApoapsis) return false;
+  if (requirement.maxPeriapsis !== undefined && orbit.periapsisAltitude > requirement.maxPeriapsis) return false;
   const { inclination } = requirement;
   return !inclination || Math.abs(orbit.inclination - inclination.target) <= inclination.tolerance;
 };
@@ -75,6 +77,10 @@ const evaluateObjective = (spec: ObjectiveSpec, input: MissionInput, orbitConfir
     case 'reach-altitude':
       if (Math.max(stats.maxAltitude, telemetry.altitude) >= spec.altitude) return 'done';
       return outcome ? 'failed' : 'pending';
+    case 'deploy-satellite':
+      if (telemetry.satelliteDeployedAt !== null && telemetry.satelliteDeployedAt !== undefined) return 'done';
+      return outcome ? 'failed' : 'pending';
+    case 'synchronous':
     case 'orbit':
       if (orbitConfirmed) return 'done';
       return outcome ? 'failed' : 'pending';
@@ -96,13 +102,21 @@ export const updateMission = (mission: MissionDefinition, state: MissionState, i
   if (shield && (minAblatorFraction === null || shield.ablatorFraction < minAblatorFraction)) minAblatorFraction = shield.ablatorFraction;
 
   // —— 轨道保持计时 ——
-  const orbitSpec = orbitSpecOf(mission);
-  const orbitPending = state.objectives.some((o, i) => o.status === 'pending' && mission.objectives[i]?.spec.kind === 'orbit');
-  let orbitHoldSince = state.orbitHoldSince;
+  const orbitIndex = state.objectives.findIndex((o, i) => o.status === 'pending' && ['orbit', 'synchronous'].includes(mission.objectives[i]?.spec.kind ?? ''));
+  const orbitDefinition = mission.objectives[orbitIndex];
+  const orbitSpec = orbitDefinition?.spec;
+  const orbitPending = orbitIndex >= 0;
+  const sequential = mission.objectives.some((o) => o.spec.kind === 'synchronous');
+  const previousDone = !sequential || state.objectives.slice(0, orbitIndex).every((o) => o.status === 'done');
+  let orbitHoldSince = state.orbitObjectiveId && state.orbitObjectiveId !== orbitDefinition?.id ? null : state.orbitHoldSince;
+  if (orbitHoldSince !== null && (telemetry.lastOrbitChangeTime ?? 0) > orbitHoldSince) orbitHoldSince = null;
   let confirmedOrbit: ConfirmedOrbit | null = state.confirmedOrbit;
   let orbitConfirmed = false;
   if (orbitSpec && orbitPending) {
-    const holding = telemetry.phase === 'flight' && telemetry.thrust === 0 && orbitMeets(telemetry.orbit, orbitSpec);
+    const meets = orbitSpec.kind === 'orbit' ? orbitMeets(telemetry.orbit, orbitSpec)
+      : orbitSpec.kind === 'synchronous' && (orbitSpec.stationary ? telemetry.synchronous?.geo : telemetry.synchronous?.gso) === true &&
+        (!orbitSpec.deployed || telemetry.satelliteDeployedAt != null);
+    const holding = previousDone && telemetry.phase === 'flight' && telemetry.thrust === 0 && meets;
     if (!holding) orbitHoldSince = null;
     else if (orbitHoldSince === null) orbitHoldSince = now;
     else if (now - orbitHoldSince >= ORBIT_CONFIRM_TIME && telemetry.orbit) {
@@ -124,16 +138,17 @@ export const updateMission = (mission: MissionDefinition, state: MissionState, i
   const objectives: ObjectiveState[] = state.objectives.map((objective, i) => {
     const definition = mission.objectives[i];
     if (!definition || objective.status !== 'pending') return objective;
-    let status = evaluateObjective(definition.spec, input, orbitConfirmed);
+    if (sequential && state.objectives.slice(0, i).some((o) => o.status !== 'done') && !outcome) return objective;
+    let status = evaluateObjective(definition.spec, input, orbitConfirmed && i === orbitIndex);
     // 停在一条不满足要求的稳定轨道上、发动机关着、推进剂也用完了：飞行不会自己结束，直接判定无法完成
     if (
       status === 'pending' &&
-      definition.spec.kind === 'orbit' &&
+      (definition.spec.kind === 'orbit' || definition.spec.kind === 'synchronous') &&
       telemetry.phase === 'flight' &&
       telemetry.thrust === 0 &&
       telemetry.remainingDeltaV < DEPLETED_DELTA_V &&
       telemetry.orbit?.classification === 'orbit' &&
-      !orbitMeets(telemetry.orbit, definition.spec)
+      !(definition.spec.kind === 'orbit' ? orbitMeets(telemetry.orbit, definition.spec) : definition.spec.stationary ? telemetry.synchronous?.geo : telemetry.synchronous?.gso)
     ) {
       status = 'failed';
       if (!definition.optional && failure === null) failure = 'out-of-propellant';
@@ -167,6 +182,7 @@ export const updateMission = (mission: MissionDefinition, state: MissionState, i
     failure: status === 'failed' ? failure : null,
     endedAt: status === 'active' ? null : now,
     orbitHoldSince,
+    orbitObjectiveId: orbitDefinition?.id,
     confirmedOrbit,
     minAblatorFraction,
   };
@@ -178,7 +194,7 @@ export const requiredObjectivesDone = (mission: MissionDefinition, state: Missio
 
 /** 轨道保持计时的进度 [0, 1]：0 表示当前不满足，1 表示已确认。 */
 export const orbitHoldProgress = (state: MissionState, simTime: number): number => {
-  if (state.confirmedOrbit) return 1;
+  if (state.confirmedOrbit && !state.objectives.some((o) => o.id === state.orbitObjectiveId && o.status === 'pending')) return 1;
   if (state.orbitHoldSince === null) return 0;
   return Math.max(0, Math.min(1, (simTime - state.orbitHoldSince) / ORBIT_CONFIRM_TIME));
 };
@@ -190,6 +206,8 @@ export const missionMetrics = (mission: MissionDefinition, state: MissionState, 
   const target = orbitSpecOf(mission)?.inclination?.target ?? null;
   const landed = outcome?.kind === 'landed';
   return {
+    'period-error': telemetry.synchronous?.periodError ?? null,
+    'longitude-span': telemetry.synchronous?.longitudeSpan ?? null,
     'max-g': stats.maxGLoad,
     'max-altitude': stats.maxAltitude,
     'orbit-spread': orbit ? orbit.apoapsisAltitude - orbit.periapsisAltitude : null,

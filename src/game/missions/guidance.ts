@@ -46,6 +46,28 @@ export const comboLabel = (combo: KeyCombo): string => {
   return keys.join(' + ');
 };
 
+/**
+ * 起飞倾斜方向与最接近的键盘方向相差较多时，"按住一个键、间断点按另一个键"的按法：
+ * 按住分量大的那个方向的键（W / S 为南北，D / A 为东西），另一个方向的键按 duty 比例的时间点按，
+ * 两个方向的倾斜速率之比就是方位角的正切。相差不到 tolerance [°] 时返回 null（直接按八个方向之一即可）。
+ */
+export const fineKickKeys = (
+  azimuthDeg: number,
+  tolerance = 8,
+): { readonly hold: string; readonly tap: string; readonly duty: number } | null => {
+  const nearest = headingOfCombo(comboForHeading(azimuthDeg));
+  const deviation = Math.abs(((azimuthDeg - nearest + 540) % 360) - 180);
+  if (deviation <= tolerance) return null;
+  const az = azimuthDeg * DEG2RAD;
+  const north = Math.cos(az);
+  const east = Math.sin(az);
+  const northKey = north >= 0 ? 'W' : 'S';
+  const eastKey = east >= 0 ? 'D' : 'A';
+  return Math.abs(east) >= Math.abs(north)
+    ? { hold: eastKey, tap: northKey, duty: Math.abs(north / east) }
+    : { hold: northKey, tap: eastKey, duty: Math.abs(east / north) };
+};
+
 const COMPASS = ['北', '东北', '东', '东南', '南', '西南', '西', '西北'] as const;
 
 /** 航向 [°] 的方位名称（八个方位）。 */

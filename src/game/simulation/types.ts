@@ -4,6 +4,7 @@
  * 这是物理线程（Web Worker）与主线程之间唯一的接口。全部是纯数据，
  * 可结构化克隆；主线程只读快照，永远不直接修改物理状态。
  */
+import type { ManeuverPlan, ManeuverNode } from '../physics/orbital/advanced';
 import type { AttitudeInput } from '../physics/attitude/attitude';
 import type { AttitudeMode } from '../physics/attitude/pointing';
 import type { Geodetic } from '../physics/frames/frames';
@@ -16,7 +17,7 @@ import type { VehicleDefinition, VehicleState } from '../vehicles/types';
 export const PHYSICS_DT = 0.02;
 
 /** 允许的时间倍率档位。 */
-export const TIME_WARP_LEVELS = [1, 2, 5, 10, 100, 1000] as const;
+export const TIME_WARP_LEVELS = [1, 2, 5, 10, 100, 1000, 10000, 100000] as const;
 export type TimeWarp = (typeof TIME_WARP_LEVELS)[number];
 
 export const isTimeWarp = (value: number): value is TimeWarp =>
@@ -125,6 +126,8 @@ export interface DebrisState {
   readonly stageIndex: number;
   /** kind 为 'fairing' 时：+1 / −1 表示两个半罩；否则为 0。 */
   readonly half: -1 | 0 | 1;
+  /** 并联助推器组中的第几个助推器（kind 为 'stage' 且该级是并联助推器组时）；其余为 0。 */
+  readonly unit: number;
   /** 质心（整流罩为几何中心）位置 [m]，ECI。 */
   readonly position: Vec3;
   /** 速度 [m/s]，ECI。 */
@@ -214,6 +217,14 @@ export interface SimSnapshot {
   /** 飞行结果；飞行尚未结束时为 null。 */
   readonly outcome: FlightOutcome | null;
   readonly debris: readonly DebrisState[];
+  readonly maneuver?: (ManeuverPlan & { readonly remaining: Vec3 }) | null;
+  readonly satelliteDeployedAt?: number | null;
+  /** 最近推进是否使用真空解析传播，供渲染插值选择同一模型。 */
+  readonly analyticCoast?: boolean;
+  /** 连续开普勒传播区间的起点；渲染仅在完整区间内使用解析插值。 */
+  readonly analyticSince?: number | null;
+  /** 最近一次推力积分或分离冲量的模拟时刻。 */
+  readonly lastOrbitChangeTime?: number;
 }
 
 /** 主线程 → 模拟器。 */
@@ -236,6 +247,9 @@ export type SimCommand =
   | { readonly type: 'jettisonHeatShield' }
   /** 配平再入的倾侧角指令 [rad]：0 为升力向上，正值向右，π 为升力向下。 */
   | { readonly type: 'setBankAngle'; readonly angle: number }
+  | { readonly type: 'setManeuver'; readonly node: ManeuverNode | null }
+  | { readonly type: 'deploySatellite' }
+  | { readonly type: 'pulseBurn'; readonly duration: number }
   | { readonly type: 'dispose' };
 
 /** 模拟器 → 主线程。 */

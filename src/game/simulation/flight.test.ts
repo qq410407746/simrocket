@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { getLaunchSiteOrDefault, launchSiteGeodetic } from '@/data/launchSites';
-import { getVehicleOrDefault } from '@/data/vehicles';
+import { referenceVehicleById } from '@/data/testing/referenceVehicles';
 import { dragArea } from '../physics/aerodynamics/drag';
 import { atmosphereAt } from '../physics/atmosphere/standardAtmosphere';
 import { DEG2RAD, EARTH, KARMAN_LINE_ALTITUDE, SEA_LEVEL, STANDARD_GRAVITY } from '../physics/constants';
@@ -28,7 +28,7 @@ import type { FlightEvent, InitialFlightState, SimEvent, SimSnapshot, Simulation
 const epochJulianDate = julianDateFromUnixMs(Date.UTC(2026, 3, 12, 14, 52));
 
 const configFor = (vehicleId: string, siteId = 'cape-canaveral', initialState?: InitialFlightState): SimulationConfig => ({
-  vehicle: getVehicleOrDefault(vehicleId),
+  vehicle: referenceVehicleById(vehicleId),
   site: launchSiteGeodetic(getLaunchSiteOrDefault(siteId)),
   epochJulianDate,
   initialState,

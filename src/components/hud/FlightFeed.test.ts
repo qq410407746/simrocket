@@ -3,7 +3,8 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getLaunchSiteOrDefault, launchSiteGeodetic } from '@/data/launchSites';
 import { MISSION_CATALOG } from '@/data/missions';
-import { VEHICLE_CATALOG, getVehicleOrDefault } from '@/data/vehicles';
+import { VEHICLE_CATALOG } from '@/data/vehicles';
+import { referenceVehicleById } from '@/data/testing/referenceVehicles';
 import { createMissionState } from '@/game/missions/tracker';
 import { Simulation } from '@/game/simulation/Simulation';
 import { buildSnapshot } from '@/game/simulation/snapshot';
@@ -33,7 +34,7 @@ vi.mock('@/stores/gameStore', async (importOriginal) => {
   ) };
 });
 
-const vehicle = getVehicleOrDefault('frontier-1');
+const vehicle = referenceVehicleById('frontier-1');
 
 beforeEach(() => {
   useSimStore.setState({ ...INITIAL_SIM_STATE });
@@ -80,7 +81,10 @@ describe('FlightFeed current language', () => {
   const render = () => renderToStaticMarkup(createElement(FlightFeed));
 
   it('switches existing flight hints and event history together without changing simulation state', () => {
-    const config = createFlightConfig(vehicle, site);
+    // 组件按游戏里选中的型号解释事件：这里用联盟-2.1a（第 0 级是并联助推器组）
+    const soyuz = VEHICLE_CATALOG.find((v) => v.id === 'soyuz-2-1a')!;
+    useGameStore.setState({ vehicleId: soyuz.id });
+    const config = createFlightConfig(soyuz, site);
     const telemetry = deriveTelemetry(buildSnapshot(new Simulation(config), { seq: 0, timeWarp: 1, paused: false, simRate: 1 }), config);
     const events: FlightEvent[] = [
       { kind: 'ignition', stageIndex: 0, time: 0 }, { kind: 'liftoff', stageIndex: -1, time: 1 },
@@ -91,8 +95,8 @@ describe('FlightFeed current language', () => {
     useGameStore.setState({ language: 'en' });
     const english = render();
     expect(english).toContain('Press Space');
-    expect(english).toContain('Stage 1 propellant depleted');
-    expect(english).toContain('Stage 1 separated');
+    expect(english).toContain('Boosters (B/V/G/D) propellant depleted');
+    expect(english).toContain('Boosters (B/V/G/D) separated');
     expect(english).toContain('Fairing separated');
     expect(english).not.toMatch(/\p{Script=Han}/u);
     expect(english.match(/<li /g)).toHaveLength(4);
@@ -100,7 +104,7 @@ describe('FlightFeed current language', () => {
     useGameStore.setState({ language: 'zh' });
     const chinese = render();
     expect(chinese).toContain('按 空格 点火起飞');
-    expect(chinese).toContain('一级推进剂耗尽');
+    expect(chinese).toContain('助推器（B/V/G/D）推进剂耗尽');
     useGameStore.setState({ language: 'en' });
     expect(render()).toBe(english);
     expect(useSimStore.getState().telemetry).toBe(telemetry);

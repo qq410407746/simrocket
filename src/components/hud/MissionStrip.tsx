@@ -20,6 +20,7 @@ export function MissionStrip() {
   if (!definition || !state) return null;
   const mission = localizeMission(definition, language);
 
+  const currentObjective = state.objectives.find((objective) => objective.status === 'pending')?.id;
   const statusTone = state.status === 'success' ? 'text-ok' : state.status === 'failed' ? 'text-danger' : 'text-ink';
   return (
     <div
@@ -46,9 +47,10 @@ export function MissionStrip() {
         {mission.objectives.map((objective, i) => {
           const status = state.objectives[i]?.status ?? 'pending';
           const mark = OBJECTIVE_MARK[status];
-          const progress = objectiveProgress(objective.spec, status, telemetry, stats, state, language);
+          const progress = objective.id === currentObjective
+            ? objectiveProgress(objective.spec, status, telemetry, stats, state, language, objective.id) : '';
           return (
-            <span key={objective.id} className="flex items-baseline gap-1 whitespace-nowrap" data-testid={`objective-${objective.id}`} data-status={status}>
+            <span key={objective.id} className="flex max-w-full flex-wrap items-baseline justify-center gap-1" data-testid={`objective-${objective.id}`} data-status={status}>
               <span className={`font-semibold ${mark.tone}`}>{mark.mark}</span>
               <span className={status === 'pending' ? 'text-ink' : mark.tone}>
                 {objective.title}

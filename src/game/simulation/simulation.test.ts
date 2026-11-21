@@ -13,7 +13,7 @@ import {
 import { distance, dot, length, vec3 } from '../physics/math/vec3';
 import { deriveTelemetry } from '../telemetry/telemetry';
 import { liftoffMass } from '../vehicles/analysis';
-import { getVehicleOrDefault } from '@/data/vehicles';
+import { referenceVehicleById } from '@/data/testing/referenceVehicles';
 import { FixedStepClock, MAX_WALL_DT } from './FixedStepClock';
 import { Simulation, isValidVehicleState } from './Simulation';
 import { SimulationHost } from './SimulationHost';
@@ -22,7 +22,7 @@ import { PHYSICS_DT, type SimEvent, type SimSnapshot, type SimulationConfig } fr
 
 const site = getLaunchSiteOrDefault('cape-canaveral');
 const config: SimulationConfig = {
-  vehicle: getVehicleOrDefault('frontier-1'),
+  vehicle: referenceVehicleById('frontier-1'),
   site: launchSiteGeodetic(site),
   epochJulianDate: julianDateFromUnixMs(Date.UTC(2026, 2, 20, 15, 0, 0)),
 };

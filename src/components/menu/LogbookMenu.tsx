@@ -1,7 +1,11 @@
+import { useState } from 'react';
+import { ArchiveViewer } from './ArchiveViewer';
+import { useArchiveStore, eraseFlightArchives } from '@/stores/archiveStore';
 import { findLaunchSite } from '@/data/launchSites';
 import { findMission } from '@/data/missions';
 import { findVehicle } from '@/data/vehicles';
 import { useI18n } from '@/i18n';
+import { uiMessageText } from '@/i18n/messages';
 import { localizeMission } from '@/i18n/catalog';
 import { useCareerStore } from '@/stores/careerStore';
 import { formatDuration, formatNumber } from '@/utils/format';
@@ -9,16 +13,22 @@ import { GRADE_TONE, logDate, logOrbit, logResult } from '../hud/missionLabels';
 
 /** 飞行记录：最近的飞行，每次一条摘要（最新的在前）。 */
 export function LogbookMenu() {
+  const [opened, setOpened] = useState<string | null>(null);
+  const archiveNotice = useArchiveStore((state) => state.notice);
+  const archiveError = useArchiveStore((state) => state.error);
   const { language, t } = useI18n();
   const logbook = useCareerStore((s) => s.logbook);
   const resetCareer = useCareerStore((s) => s.resetCareer);
 
   return (
-    <section className="flex min-h-0 flex-1 flex-col" data-testid="logbook">
+    <section className="flex shrink-0 flex-col" data-testid="logbook">
       <div className="mb-1.5 flex items-baseline justify-between">
         <h2 className="text-[11px] font-semibold tracking-[0.18em] text-ink-faint">{t('飞行记录', 'Flight log')}</h2>
         <span className="readout text-[10px] text-ink-faint">{t(`${logbook.length} 条`, `${logbook.length} ${logbook.length === 1 ? 'entry' : 'entries'}`)}</span>
       </div>
+      {archiveNotice && <div data-testid="archive-notice" className={archiveError ? 'text-xs text-danger' : 'text-xs text-ink-faint'} role="status">{uiMessageText(archiveNotice, language)}
+        {archiveError && logbook.length === 0 && <button onClick={() => { void eraseFlightArchives(); }}>{t('重试清除曲线', 'Retry clearing curves')}</button>}
+      </div>}
       {logbook.length === 0 ? (
         <p className="rounded-md border border-line/60 bg-panel/40 px-3 py-4 text-center text-[12px] leading-relaxed text-ink-dim" data-testid="logbook-empty">
           {t('还没有飞行记录。', 'No flights recorded yet.')}
@@ -51,7 +61,7 @@ export function LogbookMenu() {
                 <div className="readout mt-0.5 flex flex-wrap gap-x-2.5 text-[10px] text-ink-faint">
                   <span>{logDate(entry.date)}</span>
                   <span>
-                    {vehicle ? t(vehicle.nameZh, vehicle.name) : entry.vehicleId} · {site ? t(site.nameZh, site.name) : '—'}
+                    {vehicle ? t(vehicle.nameZh, vehicle.name) : entry.vehicleName ?? entry.vehicleId} · {site ? t(site.nameZh, site.name) : '—'}
                     {entry.start === 'orbit' ? t(' · 轨道出发', ' · Orbital start') : ''}
                   </span>
                   <span>T+{formatDuration(entry.duration)}</span>
@@ -61,6 +71,10 @@ export function LogbookMenu() {
                   <span>{formatNumber(entry.maxGLoad, 1)} g</span>
                   {orbit ? <span className="text-data-dim">{orbit}</span> : <span>{t('航程', 'Range')} {formatNumber(entry.downrange / 1000, 0)} km</span>}
                 </div>
+                <div data-testid="archive-controls">
+                  <button className="mt-1 rounded border border-line px-2 py-1 text-xs text-data" onClick={() => setOpened(opened === entry.id ? null : entry.id)}>{opened === entry.id ? t('关闭遥测回看', 'Close telemetry playback') : t('查看遥测曲线', 'View telemetry curves')}</button>
+                  {opened === entry.id && <ArchiveViewer key={entry.id} id={entry.id} />}
+                </div>
               </li>
             );
           })}
@@ -69,7 +83,7 @@ export function LogbookMenu() {
       <button
         type="button"
         onClick={() => {
-          if (window.confirm(t('清空全部任务进度与飞行记录？此操作无法撤销。', 'Clear all mission progress and flight records? This cannot be undone.'))) resetCareer();
+          if (window.confirm(t('清空全部任务进度与飞行记录？此操作无法撤销。', 'Clear all mission progress and flight records? This cannot be undone.'))) { setOpened(null); resetCareer(); }
         }}
         data-testid="reset-career"
         className="mt-3 self-start rounded border border-line px-2 py-0.5 text-[10px] text-ink-faint transition-colors hover:border-danger hover:text-danger"

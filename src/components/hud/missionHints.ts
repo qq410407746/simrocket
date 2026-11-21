@@ -5,7 +5,7 @@
  * 优先级：通用提示里的警告（结构、过热、推进剂耗尽、再入姿态……）优先；
  * 其余时候任务提示优先，没有任务提示再回到通用提示。
  */
-import { type LaunchGuidance, comboLabel, compassLabel, launchGuidance } from '@/game/missions/guidance';
+import { type LaunchGuidance, comboLabel, compassLabel, fineKickKeys, launchGuidance } from '@/game/missions/guidance';
 import { ORBIT_CONFIRM_TIME, missionOrbitRequirement, orbitMeets } from '@/game/missions/tracker';
 import type { MissionDefinition, MissionState, OrbitRequirement } from '@/game/missions/types';
 import { RAD2DEG } from '@/game/physics/constants';
@@ -59,7 +59,16 @@ const ascentHint = (t: Telemetry, mission: MissionDefinition, guidance: LaunchGu
       tone: 'info',
     };
   }
-  // 标准的重力转弯：只有不是向正东发射时才需要改写通用提示里的方向
+  // 标准的重力转弯。发射方位角与八个键盘方向都差得较多时：按住一个键、间断点按另一个键
+  const fine = fineKickKeys(guidance.azimuthDeg);
+  if (fine && t.missionTime !== null && t.missionTime < 20 && t.pitch > 1.53) {
+    const heading = String(Math.round(guidance.azimuthDeg)).padStart(3, '0');
+    const share = fine.duty > 0.4 && fine.duty < 0.6 ? tr('大约一半的时间', 'about half the time') : tr(`约 ${Math.round(fine.duty * 100)}% 的时间`, `about ${Math.round(fine.duty * 100)}% of the time`);
+    return {
+      text: tr(`速度达到约 60 m/s 后，按住 ${fine.hold} 倾斜的同时间断地点按 ${fine.tap}（${share}），倾斜约 2° 时航向读数应在 ${heading}° 附近`, `At about 60 m/s, hold ${fine.hold} to tilt while tapping ${fine.tap} on and off (${share}); at about 2° of tilt the heading reading should be near ${heading}°`),
+      tone: 'info',
+    };
+  }
   if (guidance.keyHeadingDeg !== 90 && t.missionTime !== null && t.missionTime < 12 && t.pitch > 1.55) {
     return {
       text: tr(`速度达到约 60 m/s 后，按住 ${keys} 向${direction}倾斜约 2°（俯仰读数 88°，航向约 ${String(Math.round(guidance.keyHeadingDeg)).padStart(3, '0')}°）`, `At about 60 m/s, hold ${keys} to tilt ${direction} by about 2° (pitch reading 88°, heading about ${String(Math.round(guidance.keyHeadingDeg)).padStart(3, '0')}°)`),
@@ -170,6 +179,16 @@ export const missionFlightHint = (
   const generic = flightHint(t, vehicle, language);
   if (!t || !mission || !state || state.status !== 'active' || t.phase !== 'flight') return generic;
   if (generic?.tone === 'warn') return generic;
+
+  if (mission.id === 'geo-deployment') {
+    const tr = createTranslator(language);
+    const current = state.objectives.find((objective) => objective.status === 'pending')?.id;
+    if (current === 'gto') return { text: tr('打开地图规划 GTO 注入；按半燃烧时长提前点火，远地点约35793 km后关机，保持十秒确认。', 'Open the map and plan the GTO injection. Ignite half the burn time early, shut down at an apoapsis of about 35,793 km, and hold for ten seconds to confirm.'), tone: 'info' };
+    if (current === 'geo') return { text: tr('规划赤道圆化，在远地点附近同时升近地点并消除倾角；关机后检查周期、偏心率与星下点经度摆幅。', 'Plan the equatorial circularization: near apoapsis, raise periapsis and remove inclination in one burn. After shutdown, check the period, eccentricity and sub-satellite longitude drift.'), tone: 'info' };
+    if (current === 'deploy') return { text: tr('GEO 已确认：关机，在地图机动面板点击“部署卫星”。部署后无法再修正轨道。', 'GEO confirmed: shut down and click “Deploy satellite” in the map maneuver panel. The orbit cannot be corrected after deployment.'), tone: 'info' };
+    if (current === 'confirm') return { text: tr('卫星已部署：关机保持十秒，检查分离冲量后的 GEO。', 'Satellite deployed: keep the engine off for ten seconds and check GEO after the separation impulse.'), tone: 'info' };
+    if (t.activeStageIndex === 0 && t.attitudeMode === 'manual' && t.pitch * RAD2DEG > 88) return { text: tr('先竖直上升到 100 m/s，再轻按 D 向东倾斜约 1°，松开后用顺行保持完成重力转弯。', 'Climb vertically to 100 m/s, tap D to tilt about 1° east, then release and use prograde hold for the gravity turn.'), tone: 'info' };
+  }
 
   const guidance = launchGuidance(mission, latitude);
   const ascent = ascentHint(t, mission, guidance, language);

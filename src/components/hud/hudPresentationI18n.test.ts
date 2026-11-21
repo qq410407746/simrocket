@@ -47,7 +47,7 @@ vi.mock('@/stores/gameStore', async (importOriginal) => {
   ) };
 });
 
-function telemetry(overrides: Partial<Telemetry> = {}, vehicleId = 'frontier-1', start: 'pad' | 'orbit' = 'pad'): Telemetry {
+function telemetry(overrides: Partial<Telemetry> = {}, vehicleId = 'soyuz-2-1a', start: 'pad' | 'orbit' = 'pad'): Telemetry {
   const config = createFlightConfig(getVehicleOrDefault(vehicleId), launchSiteGeodetic(getLaunchSiteOrDefault('cape-canaveral')), start);
   const sim = new Simulation(config);
   return { ...deriveTelemetry(buildSnapshot(sim, { seq: 0, timeWarp: 1, paused: false, simRate: 1 }), config), ...overrides };
@@ -66,7 +66,7 @@ function expectEnglish(markup: string, labels: readonly string[] = []): void {
 beforeEach(() => {
   locale.language = 'zh';
   useSimStore.setState({ ...INITIAL_SIM_STATE, simRate: 1 });
-  useGameStore.setState({ vehicleId: 'frontier-1', cameraMode: 'chase' });
+  useGameStore.setState({ vehicleId: 'soyuz-2-1a', cameraMode: 'chase' });
 });
 
 describe('localized flight HUD presentation', () => {
@@ -112,7 +112,7 @@ describe('localized flight HUD presentation', () => {
     expectEnglish(render(MapOverlay), ['Orbit map', 'Orbit shown after liftoff.']);
     useSimStore.setState({ telemetry: telemetry({ phase: 'landed' }) });
     expectEnglish(render(MapOverlay), ['Flight has ended.']);
-    useSimStore.setState({ telemetry: telemetry({ phase: 'flight', simTime: 100 }, 'frontier-1', 'orbit') });
+    useSimStore.setState({ telemetry: telemetry({ phase: 'flight', simTime: 100 }, 'soyuz-2-1a', 'orbit') });
     expectEnglish(render(MapOverlay), ['Current orbit (two-body, no drag)', 'Predicted path (with drag)', 'Apoapsis Ap / periapsis Pe', 'No ground impact within the prediction window.', 'Orbital elements', 'Drag to rotate; scroll to zoom.']);
     useSimStore.setState({ predictedImpact: { time: 130, latitude: 0, longitude: 0, speed: 123 } });
     expectEnglish(render(MapOverlay), ['Predicted impact (no further thrust)', 'Time', 'In 30 s', 'Position', 'Speed', '123.0']);
@@ -121,7 +121,7 @@ describe('localized flight HUD presentation', () => {
   });
 
   it('localizes every vehicle, payload, stage and propulsion state while preserving numeric values', () => {
-    expectEnglish(render(VehiclePanel), ['Frontier-1', 'Egret spacecraft', 'Propulsion', 'Engine', 'Off', 'Thrust', 'Throttle', 'Liftoff TWR', 'Total mass', 'Remaining Δv', 'Stages &amp; fuel', 'Top to bottom']);
+    expectEnglish(render(VehiclePanel), ['Soyuz-2.1a', 'Soyuz MS descent module', 'Propulsion', 'Engine', 'Off', 'Thrust', 'Throttle', 'Liftoff TWR', 'Total mass', 'Remaining Δv', 'Stages &amp; fuel', 'Top to bottom']);
     for (const vehicle of VEHICLE_CATALOG) {
       useGameStore.setState({ vehicleId: vehicle.id });
       for (const state of [
@@ -133,20 +133,20 @@ describe('localized flight HUD presentation', () => {
         expectEnglish(render(VehiclePanel), [vehicle.name]);
       }
     }
-    useGameStore.setState({ vehicleId: 'frontier-1' });
-    useSimStore.setState({ telemetry: telemetry({ thrust: 100, ignited: true, throttle: 0.2, effectiveThrottle: 0.4, stageAttached: [false, true] }) });
+    useGameStore.setState({ vehicleId: 'soyuz-2-1a' });
+    useSimStore.setState({ telemetry: telemetry({ thrust: 100, ignited: true, throttle: 0.2, effectiveThrottle: 0.4, stageAttached: [false, true, true, true] }) });
     expectEnglish(render(VehiclePanel), ['Running', 'Separated', '20 → 40']);
     useSimStore.setState({ telemetry: telemetry({ thrust: 0, ignited: true }) });
     expectEnglish(render(VehiclePanel), ['Standby']);
     const chinese = render(VehiclePanel, 'zh');
-    for (const text of ['边疆一号', '白鹭号飞船', '推进', '待机', '起飞推重比', '分级与推进剂', '自上而下', '一级', '二级']) expect(chinese).toContain(text);
+    for (const text of ['联盟-2.1a', '联盟 MS 返回舱', '推进', '待机', '起飞推重比', '分级与推进剂', '自上而下', '芯级（A）', '第三级（I）']) expect(chinese).toContain(text);
   });
 
   it('localizes telemetry headings, waiting state and every orbit classification with unchanged readouts', () => {
     expectEnglish(render(TelemetryPanel), ['Flight data', 'Waiting for physics data…']);
     useSimStore.setState({ telemetry: telemetry() });
     expectEnglish(render(TelemetryPanel), ['Position &amp; speed', 'Altitude', 'Surface speed', 'Vert. speed', 'Horiz. speed', 'Orbit speed', 'Downrange', 'Subpoint', 'After liftoff', 'Loads &amp; aero', 'G-load', 'Dyn. pressure', 'Mach', 'AoA', 'Lift/drag']);
-    const orbit = telemetry({}, 'frontier-1', 'orbit').orbit!;
+    const orbit = telemetry({}, 'soyuz-2-1a', 'orbit').orbit!;
     for (const classification of ['suborbital', 'atmospheric', 'orbit', 'escape'] as const) {
       useSimStore.setState({ telemetry: telemetry({ phase: 'flight', altitude: 200_000, surfaceSpeed: 7_800, airDensity: 0, orbit: { ...orbit, classification } }) });
       expectEnglish(render(TelemetryPanel), ['Apoapsis', 'Periapsis', 'To apoapsis', 'To periapsis', 'Incl.', 'Ecc.', 'Period', '200.00', '7,800.0']);
@@ -168,12 +168,12 @@ describe('localized flight HUD presentation', () => {
       [{}, 'On orbit'],
     ];
     for (const [state, label] of phases) {
-      const fixture = telemetry({ simTime: 120, missionTime: 60, ...state }, 'frontier-1', 'orbit');
+      const fixture = telemetry({ simTime: 120, missionTime: 60, ...state }, 'soyuz-2-1a', 'orbit');
       useSimStore.setState({ telemetry: fixture, execution: 'main-thread' });
       expectEnglish(render(TopBar), [label, 'Main thread (fallback)', 'T+ 00:01:00', '00:02:00']);
       expect(useSimStore.getState().telemetry).toBe(fixture);
     }
-    const orbit = telemetry({}, 'frontier-1', 'orbit').orbit!;
+    const orbit = telemetry({}, 'soyuz-2-1a', 'orbit').orbit!;
     useSimStore.setState({ telemetry: telemetry({ phase: 'flight', orbit: { ...orbit, classification: 'escape' } }), execution: 'worker' });
     expectEnglish(render(TopBar), ['Escape', 'Web Worker']);
     useSimStore.setState({ telemetry: telemetry({ phase: 'flight', orbit: null }) });
@@ -188,11 +188,12 @@ describe('localized flight HUD presentation', () => {
       [{ phase: 'prelaunch', ignited: false }, 'Liftoff'],
       [{ phase: 'prelaunch', ignited: true }, 'Ignited'],
       [{ phase: 'landed' }, 'Flight ended'],
-      [{ phase: 'flight', ignited: false, activeStageIndex: 0 }, 'Start Stage 1'],
-      [{ phase: 'flight', ignited: true, activeStageIndex: 0 }, 'Separate Stage 1'],
-      [{ phase: 'flight', ignited: true, activeStageIndex: 1 }, 'Separate Stage 2'],
-      [{ phase: 'flight', ignited: false, activeStageIndex: 2, payloadPropellant: 100 }, 'Ignite craft'],
-      [{ phase: 'flight', ignited: true, activeStageIndex: 2 }, 'No stages left'],
+      [{ phase: 'flight', ignited: false, activeStageIndex: 0 }, 'Start Boosters (B/V/G/D)'],
+      [{ phase: 'flight', ignited: true, activeStageIndex: 0 }, 'Jettison boosters'],
+      [{ phase: 'flight', ignited: true, activeStageIndex: 0 }, 'Core stage (A) keeps burning'],
+      [{ phase: 'flight', ignited: true, activeStageIndex: 1 }, 'Separate Core stage (A)'],
+      [{ phase: 'flight', ignited: false, activeStageIndex: 3 }, 'Start Service and orbital modules'],
+      [{ phase: 'flight', ignited: true, activeStageIndex: 4 }, 'No stages left'],
     ];
     for (const [state, label] of stages) {
       useSimStore.setState({ telemetry: telemetry(state) });
@@ -212,17 +213,17 @@ describe('localized flight HUD presentation', () => {
     expectEnglish(render(ControlBar), ['aria-label="Resume"', 'Current limit: 5×']);
     useSimStore.setState({ paused: false, simRate: 2, telemetry: telemetry({ heatShieldAttached: false }) });
     expectEnglish(render(ControlBar), ['Actual 2×', 'Shield off']);
-    useGameStore.setState({ vehicleId: 'zenith-3' });
+    useGameStore.setState({ vehicleId: 'atlas-v-401' });
     for (const fairingAttached of [true, false]) {
-      useSimStore.setState({ telemetry: telemetry({ phase: 'flight', fairingAttached }, 'zenith-3') });
+      useSimStore.setState({ telemetry: telemetry({ phase: 'flight', fairingAttached }, 'atlas-v-401') });
       expectEnglish(render(ControlBar), [fairingAttached ? 'Fairing' : 'Fairing off']);
     }
   });
 
   it('preserves the default Chinese control text and dynamic warnings exactly', () => {
-    useSimStore.setState({ telemetry: telemetry({ phase: 'flight', ignited: true }), timeWarp: 5, maxTimeWarp: 5, simRate: 2 });
+    useSimStore.setState({ telemetry: telemetry({ phase: 'flight', ignited: true, activeStageIndex: 1 }), timeWarp: 5, maxTimeWarp: 5, simRate: 2 });
     const markup = render(ControlBar, 'zh');
-    for (const text of ['分离一级', '分离一级并点燃二级（空格）', '暂停 / 继续（快捷键 P）', 'aria-label="节流阀"', '当前最高 5×：发动机工作或操纵时限 5×，稠密大气内限 10×', '实际 2×']) {
+    for (const text of ['分离芯级（A）', '分离芯级（A）并点燃第三级（I）（空格）', '暂停 / 继续（快捷键 P）', 'aria-label="节流阀"', '当前最高 5×：发动机工作或操纵时限 5×，稠密大气内限 10×', '实际 2×']) {
       expect(markup).toContain(text);
     }
   });

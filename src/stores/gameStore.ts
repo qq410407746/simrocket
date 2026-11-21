@@ -1,6 +1,7 @@
 /**
  * 游戏级状态：当前界面、玩家选择、设置。持久化到 LocalStorage（本地存档的第一步）。
  */
+import { hasVehicle } from './designStore';
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { DEFAULT_LAUNCH_SITE_ID, findLaunchSite } from '@/data/launchSites';
@@ -20,7 +21,7 @@ export type StartMode = 'pad' | 'orbit';
 export type GraphicsQuality = 'low' | 'medium' | 'high';
 
 /** 主菜单的页签：任务、自由飞行（沙盒）、飞行记录。 */
-export type MenuTab = 'missions' | 'sandbox' | 'logbook';
+export type MenuTab = 'missions' | 'sandbox' | 'logbook' | 'design';
 
 interface GameState {
   screen: Screen;
@@ -67,7 +68,7 @@ export const useGameStore = create<GameState>()(
       missionId: null,
       launchSerial: 0,
       selectVehicle: (id) => {
-        if (findVehicle(id)) set({ vehicleId: id });
+        if (hasVehicle(id)) set({ vehicleId: id });
       },
       selectSite: (id) => {
         if (findLaunchSite(id)) set({ siteId: id });
@@ -117,13 +118,13 @@ export const useGameStore = create<GameState>()(
         return {
           ...current,
           language: isLanguage(saved.language) ? saved.language : current.language,
-          vehicleId: saved.vehicleId && findVehicle(saved.vehicleId) ? saved.vehicleId : current.vehicleId,
+          vehicleId: saved.vehicleId && hasVehicle(saved.vehicleId) ? saved.vehicleId : current.vehicleId,
           siteId: saved.siteId && findLaunchSite(saved.siteId) ? saved.siteId : current.siteId,
           quality:
             saved.quality === 'low' || saved.quality === 'medium' || saved.quality === 'high'
               ? saved.quality
               : current.quality,
-          menuTab: saved.menuTab === 'missions' || saved.menuTab === 'sandbox' || saved.menuTab === 'logbook' ? saved.menuTab : current.menuTab,
+          menuTab: saved.menuTab === 'missions' || saved.menuTab === 'sandbox' || saved.menuTab === 'logbook' || saved.menuTab === 'design' ? saved.menuTab : current.menuTab,
           selectedMissionId: saved.selectedMissionId && findMission(saved.selectedMissionId) ? saved.selectedMissionId : current.selectedMissionId,
         };
       },

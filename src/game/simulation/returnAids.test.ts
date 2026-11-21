@@ -4,7 +4,8 @@
  */
 import { describe, expect, it } from 'vitest';
 import { getLaunchSiteOrDefault, launchSiteGeodetic } from '@/data/launchSites';
-import { VEHICLE_CATALOG, getVehicleOrDefault } from '@/data/vehicles';
+import { VEHICLE_CATALOG } from '@/data/vehicles';
+import { referenceVehicleById } from '@/data/testing/referenceVehicles';
 import { trimDirection } from '../physics/attitude/pointing';
 import { DEG2RAD, EARTH, STANDARD_GRAVITY } from '../physics/constants';
 import { julianDateFromUnixMs } from '../physics/ephemeris/time';
@@ -23,12 +24,12 @@ import type { FlightEvent, InitialFlightState, SimEvent, SimulationConfig } from
 const site = launchSiteGeodetic(getLaunchSiteOrDefault('cape-canaveral'));
 const epochJulianDate = julianDateFromUnixMs(Date.UTC(2026, 3, 12, 14, 52));
 const OMEGA = vec3(0, 0, EARTH.ROTATION_RATE);
-const frontier = getVehicleOrDefault('frontier-1');
-const meteor = getVehicleOrDefault('meteor-s');
+const frontier = referenceVehicleById('frontier-1');
+const meteor = referenceVehicleById('meteor-s');
 const capsule = frontier.payload as CapsuleDefinition;
 
 const configFor = (vehicleId: string, initialState?: InitialFlightState): SimulationConfig => ({
-  vehicle: getVehicleOrDefault(vehicleId),
+  vehicle: referenceVehicleById(vehicleId),
   site,
   epochJulianDate,
   initialState,

@@ -4,7 +4,7 @@ import { MainMenu } from '@/components/menu/MainMenu';
 import { LoadingOverlay, SimErrorBanner, WebGLUnsupported } from '@/components/ui/Overlays';
 import { getLaunchSiteOrDefault } from '@/data/launchSites';
 import { findMission } from '@/data/missions';
-import { getVehicleOrDefault } from '@/data/vehicles';
+import { useVehicleDefinition } from '@/stores/designStore';
 import { useI18n } from '@/i18n';
 import { SceneRoot } from '@/rendering/SceneRoot';
 import { useGameStore } from '@/stores/gameStore';
@@ -44,6 +44,7 @@ export function App() {
   const { language, t } = useI18n();
   const screen = useGameStore((s) => s.screen);
   const vehicleId = useGameStore((s) => s.vehicleId);
+  const vehicle = useVehicleDefinition(vehicleId);
   const siteId = useGameStore((s) => s.siteId);
   const startMode = useGameStore((s) => s.startMode);
   const missionId = useGameStore((s) => s.missionId);
@@ -62,12 +63,12 @@ export function App() {
   // 玩家选择的火箭、发射场或出发点变化、或开始一个任务时，以新配置重新开始模拟。
   // launchSerial 只用来触发重新开始：同一个任务再飞一次时其余依赖都没有变。
   useEffect(() => {
-    simRuntime.start(createSimulationConfig(getVehicleOrDefault(vehicleId), getLaunchSiteOrDefault(siteId), startMode), {
+    simRuntime.start(createSimulationConfig(vehicle, getLaunchSiteOrDefault(siteId), startMode), {
       siteId,
       start: startMode,
       mission: findMission(missionId) ?? null,
     });
-  }, [vehicleId, siteId, startMode, missionId, launchSerial]);
+  }, [vehicle, siteId, startMode, missionId, launchSerial]);
 
   useEffect(() => () => simRuntime.stop(), []);
 
