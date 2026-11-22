@@ -1,3 +1,8 @@
+import { nodeAtPosition } from '@/game/physics/orbital/planning';
+import { ecefToEci, geodeticToEcef } from '@/game/physics/frames/frames';
+import { groundTrack, SYNCHRONOUS_RADIUS } from '@/game/physics/orbital/advanced';
+import { stateFromElements } from '@/game/physics/orbital/elements';
+import { useSimStore } from '@/stores/simStore';
 import { useFrame, useThree } from '@react-three/fiber';
 import { useEffect, useMemo, useRef } from 'react';
 import { CanvasTexture, type InterleavedBufferAttribute, type Sprite } from 'three';
@@ -120,6 +125,10 @@ export function OrbitMap() {
   const size = useThree((s) => s.size);
   const orbit = useMemo(() => new PolyLine(ORBIT_SEGMENTS + 1, '#5fd4ff', 2.2, 0.95), []);
   const predicted = useMemo(() => new PolyLine(PREDICTION_POINTS, '#ffb347', 2.2, 0.95), []);
+  const planned = useMemo(() => new PolyLine(ORBIT_SEGMENTS + 1, '#c4a5ff', 2, 0.9), []);
+  const ground = useMemo(() => new PolyLine(181, '#a5d6a7', 1.5, 0.65), []);
+  const maneuverMarker = useRef<Sprite>(null);
+  const targetOrbit = useMemo(() => new PolyLine(ORBIT_SEGMENTS + 1, '#86efac', 1.5, 0.7), []);
   const apoapsis = useRef<Sprite>(null);
   const periapsis = useRef<Sprite>(null);
   const impact = useRef<Sprite>(null);
@@ -128,6 +137,7 @@ export function OrbitMap() {
       apoapsis: createLabelTexture('Ap', '#5fd4ff', 'up'),
       periapsis: createLabelTexture('Pe', '#5fd4ff', 'down'),
       impact: createLabelTexture('', '#ff5d5d', 'cross'),
+      maneuver: createLabelTexture('Δv', '#c4a5ff', 'up'),
     }),
     [],
   );
@@ -136,8 +146,10 @@ export function OrbitMap() {
     () => () => {
       orbit.dispose();
       predicted.dispose();
+      planned.dispose(); targetOrbit.dispose(); ground.dispose();
+      Object.values(textures).forEach((texture) => texture.dispose());
     },
-    [orbit, predicted],
+    [orbit, predicted, planned, targetOrbit, ground, textures],
   );
 
   useFrame(() => {
@@ -146,6 +158,8 @@ export function OrbitMap() {
     // 线宽以 CSS 像素计：分辨率取画布的 CSS 尺寸，线条在高像素密度屏幕上保持同样的视觉粗细
     orbit.setResolution(size.width, size.height);
     predicted.setResolution(size.width, size.height);
+    planned.setResolution(size.width, size.height); targetOrbit.setResolution(size.width, size.height);
+    ground.setResolution(size.width, size.height);
 
     const placeMarker = (sprite: Sprite | null, point: Vec3 | null): void => {
       if (!sprite) return;
@@ -158,6 +172,8 @@ export function OrbitMap() {
       sprite.material.opacity = visibility;
     };
 
+    planned.object.visible = false; targetOrbit.object.visible = false; ground.object.visible = false;
+    placeMarker(maneuverMarker.current, null);
     if (visibility <= 0) {
       orbit.update(0, () => undefined, 0);
       predicted.update(0, () => undefined, 0);
@@ -180,6 +196,45 @@ export function OrbitMap() {
       },
       visibility,
     );
+
+    const drawOrbit = (line: PolyLine, r: Vec3, v: Vec3) => {
+      const curve = sampleConic(elementsFromState(r,v), ORBIT_SEGMENTS, EARTH.RADIUS, MAX_DRAW_RADIUS);
+      line.update(curve.count, (i,out,offset) => {
+        out[offset] = curve.points[i*3]! - camera.x;
+        out[offset+1] = curve.points[i*3+2]! - camera.z;
+        out[offset+2] = -(curve.points[i*3+1]! - camera.y);
+      }, visibility);
+    };
+    const node = simRuntime.snapshots.latest?.maneuver;
+    if (node) {
+      drawOrbit(planned, node.after.position, node.after.velocity);
+      placeMarker(maneuverMarker.current, node.position);
+    }
+    // 星下点轨迹随地球当前姿态显示；每个预测点已经扣除了到达时的地球自转。
+    if (elements.kind === 'elliptic' && elements.periapsisRadius > EARTH.RADIUS) {
+      const points = groundTrack(frameState.vehiclePosition, frameState.vehicleVelocity,
+        frameState.simTime, simRuntime.earthAngleAtEpoch, elements.period);
+      ground.update(points.length, (i, out, offset) => {
+        const point = points[i]!;
+        const eci = ecefToEci(geodeticToEcef({ ...point, altitude: 10_000 }), frameState.earthAngle);
+        out[offset] = eci.x - camera.x;
+        out[offset + 1] = eci.z - camera.z;
+        out[offset + 2] = -(eci.y - camera.y);
+      }, visibility);
+    }
+    const mission = simRuntime.context.mission;
+    const status = useSimStore.getState().mission;
+    const objective = mission?.objectives.find((o,i) => status?.objectives[i]?.status === 'pending' && (o.spec.kind === 'orbit' || o.spec.kind === 'synchronous'));
+    if (objective?.spec.kind === 'orbit' || objective?.spec.kind === 'synchronous') {
+      const spec = objective.spec;
+      const rp = spec.kind === 'synchronous' ? SYNCHRONOUS_RADIUS : EARTH.RADIUS + spec.minPeriapsis;
+      const ra = spec.kind === 'synchronous' ? SYNCHRONOUS_RADIUS : EARTH.RADIUS + (spec.minApoapsis ?? spec.minPeriapsis);
+      const e = (ra-rp)/(ra+rp);
+      const state = stateFromElements({semiLatusRectum:2*rp*ra/(rp+ra),eccentricity:e,
+        inclination:spec.kind === 'synchronous' ? 0 : (spec.inclination?.target ?? elements.inclination),
+        raan:elements.raan,argumentOfPeriapsis:elements.argumentOfPeriapsis,trueAnomaly:0});
+      drawOrbit(targetOrbit,state.position,state.velocity);
+    }
 
     // —— 拱点标记：只标出位于地面以上的拱点 ——
     const basis = perifocalBasis(elements);
@@ -212,8 +267,22 @@ export function OrbitMap() {
 
   return (
     <>
-      <primitive object={orbit.object} />
+      <primitive object={orbit.object} onDoubleClick={(event: { point: { x: number; y: number; z: number }; stopPropagation: () => void }) => {
+        event.stopPropagation();
+        const snapshot = simRuntime.snapshots.latest;
+        if (!snapshot || snapshot.vehicle.throttle > 0) return;
+        const point = vec3(event.point.x + frameState.cameraPosition.x,
+          -event.point.z + frameState.cameraPosition.y, event.point.y + frameState.cameraPosition.z);
+        const node = nodeAtPosition(snapshot.vehicle.body.position, snapshot.vehicle.body.velocity, snapshot.simTime, point);
+        if (node) simRuntime.setManeuver(node);
+      }} />
       <primitive object={predicted.object} />
+      <primitive object={planned.object} />
+      <primitive object={ground.object} />
+      <sprite ref={maneuverMarker} visible={false} renderOrder={9}>
+        <spriteMaterial map={textures.maneuver} sizeAttenuation={false} depthTest={false} depthWrite={false} transparent />
+      </sprite>
+      <primitive object={targetOrbit.object} />
       <sprite ref={apoapsis} visible={false} renderOrder={9}>
         <spriteMaterial map={textures.apoapsis} sizeAttenuation={false} depthTest={false} depthWrite={false} transparent />
       </sprite>

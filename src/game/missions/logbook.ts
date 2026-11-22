@@ -16,6 +16,7 @@ export interface FlightLogEntry {
   readonly date: string;
   readonly missionId: string | null;
   readonly vehicleId: string;
+  readonly vehicleName?: string;
   readonly siteId: string;
   readonly start: 'pad' | 'orbit';
   readonly result: FlightResult;
@@ -44,6 +45,7 @@ export interface LogEntryInput {
   readonly date: string;
   readonly missionId: string | null;
   readonly vehicleId: string;
+  readonly vehicleName?: string;
   readonly siteId: string;
   readonly start: 'pad' | 'orbit';
   readonly telemetry: Telemetry;
@@ -63,6 +65,7 @@ export const buildLogEntry = (input: LogEntryInput): FlightLogEntry => {
     date: input.date,
     missionId: input.missionId,
     vehicleId: input.vehicleId,
+    ...(input.vehicleName ? { vehicleName: input.vehicleName } : {}),
     siteId: input.siteId,
     start: input.start,
     result: outcome ? outcome.kind : 'in-flight',
@@ -98,6 +101,7 @@ export const isValidLogEntry = (value: unknown): value is FlightLogEntry => {
     typeof entry.id === 'string' &&
     typeof entry.date === 'string' &&
     typeof entry.vehicleId === 'string' &&
+    (entry.vehicleName === undefined || (typeof entry.vehicleName === 'string' && entry.vehicleName.length <= 100)) &&
     typeof entry.siteId === 'string' &&
     (entry.result === 'landed' || entry.result === 'destroyed' || entry.result === 'in-flight') &&
     isFiniteNumber(entry.duration) &&

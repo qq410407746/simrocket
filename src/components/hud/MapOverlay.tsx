@@ -1,3 +1,4 @@
+import { ManeuverPanel } from './ManeuverPanel';
 import { useI18n } from '@/i18n';
 import { useGameStore } from '@/stores/gameStore';
 import { useSimStore } from '@/stores/simStore';
@@ -18,7 +19,7 @@ export function MapOverlay() {
   const impactSpeed = formatSpeed(impact?.speed ?? 0);
 
   return (
-    <div className="panel-frame pointer-events-auto w-60 rounded-lg px-3 py-2 text-[11px] backdrop-blur-md" data-testid="map-overlay">
+    <div className="panel-frame pointer-events-auto w-60 max-h-[48vh] overflow-y-auto rounded-lg px-3 py-2 text-[11px] backdrop-blur-md" data-testid="map-overlay">
       <div className="mb-1.5 flex items-center justify-between">
         <span className="text-[12px] font-semibold tracking-wider text-ink">{t('轨道地图', 'Orbit map')}</span>
         <span className="text-[9px] tracking-[0.2em] text-data-dim">ORBIT MAP</span>
@@ -27,6 +28,7 @@ export function MapOverlay() {
         <p className="text-ink-faint">{phase === 'prelaunch' ? t('起飞后显示轨道。', 'Orbit shown after liftoff.') : t('飞行已结束。', 'Flight has ended.')}</p>
       ) : (
         <>
+          <ManeuverPanel />
           <ul className="flex flex-col gap-1 text-ink-dim">
             <li className="flex items-center gap-2">
               <span className="h-0.5 w-5 rounded bg-data" aria-hidden />

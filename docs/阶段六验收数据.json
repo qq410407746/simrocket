@@ -1,0 +1,218 @@
+{
+  "mission": {
+    "status": "success",
+    "objectives": [
+      {
+        "id": "parking",
+        "status": "done",
+        "resolvedAt": 888.12
+      },
+      {
+        "id": "gto",
+        "status": "done",
+        "resolvedAt": 1713.52
+      },
+      {
+        "id": "geo",
+        "status": "done",
+        "resolvedAt": 20294.84
+      },
+      {
+        "id": "deploy",
+        "status": "done",
+        "resolvedAt": 20305.12
+      },
+      {
+        "id": "confirm",
+        "status": "done",
+        "resolvedAt": 20315.4
+      }
+    ],
+    "failure": null,
+    "endedAt": 20315.4,
+    "orbitHoldSince": 20305.16,
+    "orbitObjectiveId": "confirm",
+    "confirmedOrbit": {
+      "apoapsisAltitude": 35804270.386112094,
+      "periapsisAltitude": 35790730.89678427,
+      "inclination": 0.000015796706855100794,
+      "eccentricity": 0.00016054032182622567,
+      "period": 86177.36673992588,
+      "remainingDeltaV": 0
+    },
+    "minAblatorFraction": null
+  },
+  "score": {
+    "total": 100,
+    "grade": "S",
+    "items": [
+      {
+        "id": "objectives",
+        "label": "完整轨道任务",
+        "weight": 70,
+        "fraction": 1,
+        "points": 70,
+        "metric": null,
+        "value": null,
+        "note": "完成全部五个步骤。"
+      },
+      {
+        "id": "period",
+        "label": "周期精度",
+        "weight": 15,
+        "fraction": 0.9703081569413453,
+        "points": 14.55462235412018,
+        "metric": "period-error",
+        "value": 13.266102736452012,
+        "note": "与恒星日相差10秒以内满分。"
+      },
+      {
+        "id": "longitude",
+        "label": "星下点稳定性",
+        "weight": 15,
+        "fraction": 1,
+        "points": 15,
+        "metric": "longitude-span",
+        "value": 0.0011811037827280657,
+        "note": "未来一个恒星日经度摆幅0.1°以内满分。"
+      }
+    ]
+  },
+  "telemetry": {
+    "synchronous": {
+      "gso": true,
+      "periodError": 13.266102735738968,
+      "longitudeSpan": 0.0011812603248015918,
+      "geo": true
+    },
+    "satelliteDeployedAt": 20305.12,
+    "lastOrbitChangeTime": 20305.12,
+    "simTime": 20334.920000000002,
+    "missionTime": 20334.74,
+    "phase": "flight",
+    "altitude": 35796593.77794608,
+    "inertialSpeed": 3074.5683203393573,
+    "surfaceSpeed": 0.5963655110238489,
+    "verticalSpeed": -0.48914342618184664,
+    "horizontalSpeed": 0.3411605653674246,
+    "latitude": 0.000015770748389400608,
+    "longitude": 2.115677429523265,
+    "downrange": 19129053.021633126,
+    "localGravity": 0.22417136528479947,
+    "gLoad": 0,
+    "pitch": -0.020132538854521688,
+    "heading": 1.6697642479823367,
+    "mass": 4500,
+    "stagePropellant": [
+      0,
+      0,
+      1405.6128338809006
+    ],
+    "stageAttached": [
+      false,
+      false,
+      false
+    ],
+    "payloadPropellant": 0,
+    "fairingAttached": false,
+    "activeStageIndex": 3,
+    "throttle": 0,
+    "effectiveThrottle": 0,
+    "ignited": false,
+    "thrust": 0,
+    "thrustToWeight": 0,
+    "remainingDeltaV": 0,
+    "dynamicPressure": 0,
+    "mach": 0.0009407352162134821,
+    "drag": 0,
+    "angleOfAttack": 0,
+    "airDensity": 0,
+    "attitudeMode": "manual",
+    "trimAngle": 0,
+    "bankAngle": 0,
+    "heatShieldAttached": false,
+    "canJettisonHeatShield": false,
+    "orbit": {
+      "kind": "elliptic",
+      "classification": "orbit",
+      "apoapsisAltitude": 35804270.386111885,
+      "periapsisAltitude": 35790730.89678403,
+      "eccentricity": 0.00016054032182668081,
+      "inclination": 0.000015796706855100794,
+      "period": 86177.36673992517,
+      "semiMajorAxis": 42168500.64144797,
+      "raan": 2.598979497762395,
+      "argumentOfPeriapsis": 3.0647324856249734,
+      "trueAnomaly": 4.846592100897611,
+      "timeToApoapsis": 62787.99079132188,
+      "timeToPeriapsis": 19699.3074213593
+    },
+    "lift": 0,
+    "liftToDrag": 0,
+    "bendingLoad": 0,
+    "referenceHeatFlux": 0,
+    "thermal": [
+      {
+        "zone": "nose",
+        "owner": "payload",
+        "material": "卫星本体",
+        "surfaceTemperature": 270.1201645757175,
+        "interiorTemperature": 270.1920091690143,
+        "surfaceLimit": 520,
+        "interiorLimit": 350,
+        "heatFlux": 0,
+        "heatLoad": 49683.40074096882,
+        "ablative": false,
+        "ablatorFraction": 1,
+        "margin": 1,
+        "failure": null
+      },
+      {
+        "zone": "side",
+        "owner": "payload",
+        "material": "卫星本体",
+        "surfaceTemperature": 287.3414471963339,
+        "interiorTemperature": 288.1423844047553,
+        "surfaceLimit": 520,
+        "interiorLimit": 350,
+        "heatFlux": 0,
+        "heatLoad": 0,
+        "ablative": false,
+        "ablatorFraction": 1,
+        "margin": 1,
+        "failure": null
+      },
+      {
+        "zone": "base",
+        "owner": "payload",
+        "material": "卫星本体",
+        "surfaceTemperature": 287.3414471963339,
+        "interiorTemperature": 288.1423844047553,
+        "surfaceLimit": 520,
+        "interiorLimit": 350,
+        "heatFlux": 0,
+        "heatLoad": 0,
+        "ablative": false,
+        "ablatorFraction": 1,
+        "margin": 1,
+        "failure": null
+      }
+    ],
+    "criticalZone": 0,
+    "structure": {
+      "maxGLoad": 10,
+      "maxDynamicPressure": 3000,
+      "maxBendingLoad": null
+    },
+    "landingLimits": {
+      "verticalSpeed": 4,
+      "horizontalSpeed": 2,
+      "tilt": 0.2617993877991494
+    },
+    "parachute": {
+      "phase": "none",
+      "dragArea": 0
+    },
+    "parachuteLimits": null
+  }
+}

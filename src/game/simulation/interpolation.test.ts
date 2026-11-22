@@ -3,7 +3,7 @@ import { getLaunchSiteOrDefault, launchSiteGeodetic } from '@/data/launchSites';
 import { julianDateFromUnixMs } from '../physics/ephemeris/time';
 import { bodyToFrame, enuBasisAt } from '../physics/frames/frames';
 import { distance, dot, vec3 } from '../physics/math/vec3';
-import { getVehicleOrDefault } from '@/data/vehicles';
+import { referenceVehicleById } from '@/data/testing/referenceVehicles';
 import { Simulation } from './Simulation';
 import { buildSnapshot } from './snapshot';
 import {
@@ -19,7 +19,7 @@ import {
 import type { SimSnapshot, SimulationConfig } from './types';
 
 const config: SimulationConfig = {
-  vehicle: getVehicleOrDefault('frontier-1'),
+  vehicle: referenceVehicleById('frontier-1'),
   site: launchSiteGeodetic(getLaunchSiteOrDefault('cape-canaveral')),
   epochJulianDate: julianDateFromUnixMs(Date.UTC(2026, 2, 20, 15, 0, 0)),
 };

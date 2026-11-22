@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { getLaunchSiteOrDefault, launchSiteGeodetic } from '@/data/launchSites';
-import { getVehicleOrDefault } from '@/data/vehicles';
+import { referenceVehicleById } from '@/data/testing/referenceVehicles';
 import { EARTH } from '@/game/physics/constants';
 import { julianDateForLocalSolarTime } from '@/game/physics/ephemeris/time';
 import { verticalLaunchAttitude } from '@/game/physics/frames/frames';
@@ -14,7 +14,7 @@ import type { InitialFlightState, SimulationConfig } from '@/game/simulation/typ
 import { type OrbitTelemetry, type Telemetry, deriveTelemetry } from '@/game/telemetry/telemetry';
 import { flightHint } from './flightHints';
 
-const vehicle = getVehicleOrDefault('frontier-1');
+const vehicle = referenceVehicleById('frontier-1');
 const site = launchSiteGeodetic(getLaunchSiteOrDefault('cape-canaveral'));
 const epochJulianDate = julianDateForLocalSolarTime(2026, 4, 12, 9.5, site.longitude);
 const configWith = (initialState?: InitialFlightState): SimulationConfig => ({ vehicle, site, epochJulianDate, initialState });
@@ -70,7 +70,7 @@ describe('English launch and ascent hints', () => {
 
   it('translates every catalog stage and both post-apoapsis choices', () => {
     for (const id of ['meteor-s', 'frontier-1', 'zenith-3']) {
-      const craft = getVehicleOrDefault(id);
+      const craft = referenceVehicleById(id);
       for (let i = 0; i < craft.stages.length; i++) {
         const depleted = { ...flightTelemetry, activeStageIndex: i, stagePropellant: craft.stages.map(() => 0) };
         const text = flightHint(depleted, craft, 'en')?.text;
@@ -257,7 +257,7 @@ describe('操作提示', () => {
     expect(falling?.text).toMatch(/^近地点在大气层内：将再入大气层。准备返回：按 空格 分离二级，按 T 让防热大底朝前；想留在轨道上则顺行点火/);
 
     // 没有返回舱的飞行器（天顶三号）：只提示挽救轨道
-    const zenith = getVehicleOrDefault('zenith-3');
+    const zenith = referenceVehicleById('zenith-3');
     const zenithConfig: SimulationConfig = { vehicle: zenith, site, epochJulianDate, initialState: { ...atApoapsis, separatedStages: 2 } };
     const satellite = new Simulation(zenithConfig);
     run(satellite, 25);
@@ -437,7 +437,7 @@ describe('操作提示', () => {
   });
 
   it('无动力的返回舱沿弹道上升：提示何时到达最高点，而不是提示点火', () => {
-    const meteor = getVehicleOrDefault('meteor-s');
+    const meteor = referenceVehicleById('meteor-s');
     const config: SimulationConfig = { vehicle: meteor, site, epochJulianDate };
     const sim = new Simulation(config);
     sim.stage();

@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { getVehicleOrDefault } from '@/data/vehicles';
+import { useVehicleDefinition } from '@/stores/designStore';
 import { analyzeVehicle } from '@/game/vehicles/analysis';
 import { useI18n } from '@/i18n';
 import { dataText } from '@/i18n/dataText';
@@ -13,7 +13,7 @@ import { Readout } from '../ui/Readout';
 /** 右侧飞行器状态面板：推进、质量、各级推进剂。（俯仰与航向显示在导航球下方。） */
 export function VehiclePanel() {
   const { language, t: tr } = useI18n();
-  const vehicle = getVehicleOrDefault(useGameStore((s) => s.vehicleId));
+  const vehicle = useVehicleDefinition(useGameStore((s) => s.vehicleId));
   const t = useSimStore((s) => s.telemetry);
   const performance = useMemo(() => analyzeVehicle(vehicle), [vehicle]);
 

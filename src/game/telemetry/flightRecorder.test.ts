@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { getLaunchSiteOrDefault, launchSiteGeodetic } from '@/data/launchSites';
-import { getVehicleOrDefault } from '@/data/vehicles';
+import { referenceVehicleById } from '@/data/testing/referenceVehicles';
 import { Simulation } from '../simulation/Simulation';
 import { buildSnapshot } from '../simulation/snapshot';
 import { createFlightConfig } from '../simulation/startConditions';
@@ -74,7 +74,7 @@ describe('飞行记录仪', () => {
   });
 
   it('由遥测取样：起飞前不记录；起飞后给出任务时间、高度、速度、过载与最大热流', () => {
-    const vehicle = getVehicleOrDefault('frontier-1');
+    const vehicle = referenceVehicleById('frontier-1');
     const config = createFlightConfig(vehicle, launchSiteGeodetic(getLaunchSiteOrDefault('cape-canaveral')));
     const sim = new Simulation(config);
     const telemetry = () => deriveTelemetry(buildSnapshot(sim, { seq: 0, timeWarp: 1, paused: false, simRate: 1 }), config);

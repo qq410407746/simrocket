@@ -5,7 +5,8 @@
 import { describe, expect, it } from 'vitest';
 import { getLaunchSiteOrDefault, launchSiteGeodetic } from '@/data/launchSites';
 import { ablativeHeatShield } from '@/data/materials';
-import { VEHICLE_CATALOG, getVehicleOrDefault } from '@/data/vehicles';
+import { VEHICLE_CATALOG } from '@/data/vehicles';
+import { referenceVehicleById } from '@/data/testing/referenceVehicles';
 import { DEG2RAD, EARTH, STANDARD_GRAVITY } from '../physics/constants';
 import { julianDateFromUnixMs } from '../physics/ephemeris/time';
 import { verticalLaunchAttitude } from '../physics/frames/frames';
@@ -24,7 +25,7 @@ const epochJulianDate = julianDateFromUnixMs(Date.UTC(2026, 3, 12, 14, 52));
 const OMEGA = vec3(0, 0, EARTH.ROTATION_RATE);
 
 const configFor = (vehicle: VehicleDefinition | string, initialState?: InitialFlightState): SimulationConfig => ({
-  vehicle: typeof vehicle === 'string' ? getVehicleOrDefault(vehicle) : vehicle,
+  vehicle: typeof vehicle === 'string' ? referenceVehicleById(vehicle) : vehicle,
   site,
   epochJulianDate,
   initialState,
@@ -118,7 +119,7 @@ const flyEntry = (
   return { sim, events, maxG, maxGUnderParachute, skippedOut };
 };
 
-const frontier = getVehicleOrDefault('frontier-1');
+const frontier = referenceVehicleById('frontier-1');
 const capsuleOnly = { separatedStages: 2 } as const;
 
 describe('升力', () => {
@@ -606,7 +607,7 @@ describe('结构失效', () => {
 describe('降落伞', () => {
   /** 返回舱在高空自由下落到给定高度。 */
   const fallingCapsule = (vehicleId: string, altitude: number) => {
-    const vehicle = getVehicleOrDefault(vehicleId);
+    const vehicle = referenceVehicleById(vehicleId);
     const sim = new Simulation(
       configFor(vehicle, entryState(200, 80, { altitude: 30_000, separatedStages: vehicle.stages.length, relativeToAir: true })),
     );

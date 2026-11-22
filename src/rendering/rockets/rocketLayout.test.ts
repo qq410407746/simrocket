@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { VEHICLE_CATALOG } from '@/data/vehicles';
+import { REFERENCE_VEHICLES } from '@/data/testing/referenceVehicles';
 import { vehicleHeight, vehicleMaxDiameter } from '@/game/vehicles/analysis';
 import { buildRocketLayout, nozzleArrangement } from './rocketLayout';
 
@@ -10,14 +11,25 @@ describe('火箭外形生成', () => {
     expect(layout.maxRadius).toBeCloseTo(vehicleMaxDiameter(vehicle) / 2, 9);
 
     // 推进级分段首尾相接，载荷相关的分段都从最上面一级的顶部开始
+    // 并联助推器组按个数各占一个分段，底面与芯级齐平，绕在芯级周围
     const stages = layout.sections.filter((s) => s.kind === 'stage');
-    expect(stages).toHaveLength(vehicle.stages.length);
+    expect(stages).toHaveLength(vehicle.stages.reduce((n, stage) => n + (stage.parallel?.count ?? 1), 0));
     let y = 0;
-    stages.forEach((section, i) => {
-      expect(section.stageIndex).toBe(i);
-      expect(section.baseY).toBeCloseTo(y, 9);
-      expect(section.length).toBe(vehicle.stages[i]!.geometry.length);
-      y += section.length;
+    vehicle.stages.forEach((stage, i) => {
+      const own = stages.filter((section) => section.stageIndex === i);
+      expect(own).toHaveLength(stage.parallel?.count ?? 1);
+      for (const section of own) {
+        expect(section.baseY).toBeCloseTo(y, 9);
+        expect(section.length).toBe(stage.geometry.length);
+        if (stage.parallel) {
+          const core = vehicle.stages[i + 1]!;
+          expect(Math.hypot(section.offsetX, section.offsetZ)).toBeCloseTo((core.geometry.diameter + stage.geometry.diameter) / 2, 9);
+        } else {
+          expect(section.offsetX).toBe(0);
+          expect(section.offsetZ).toBe(0);
+        }
+      }
+      if (!stage.parallel) y += stage.geometry.length;
     });
     for (const section of layout.sections.filter((s) => s.kind !== 'stage')) expect(section.baseY).toBeCloseTo(y, 9);
 
@@ -39,15 +51,18 @@ describe('火箭外形生成', () => {
     for (const vehicle of VEHICLE_CATALOG) {
       const layout = buildRocketLayout(vehicle);
       vehicle.stages.forEach((stage, i) => {
-        const section = layout.sections.find((s) => s.kind === 'stage' && s.stageIndex === i)!;
-        expect(section.parts.filter((p) => p.kind === 'nozzle')).toHaveLength(stage.engineCount);
-        expect(section.plumes).toHaveLength(stage.engineCount);
+        // 并联助推器组：发动机台数是整组合计，分摊到各个助推器的分段上
+        const own = layout.sections.filter((s) => s.kind === 'stage' && s.stageIndex === i);
+        const nozzles = own.reduce((n, section) => n + section.parts.filter((p) => p.kind === 'nozzle').length, 0);
+        const plumes = own.reduce((n, section) => n + section.plumes.length, 0);
+        expect(nozzles).toBe(stage.engineCount);
+        expect(plumes).toBe(stage.engineCount);
       });
     }
   });
 
   it('级间段属于下面一级，长度覆盖上面一级的发动机舱', () => {
-    const frontier = VEHICLE_CATALOG.find((v) => v.id === 'frontier-1')!;
+    const frontier = REFERENCE_VEHICLES['frontier-1'];
     const [first, second] = buildRocketLayout(frontier).sections;
     expect(first!.overhang).toBeGreaterThan(1);
     expect(second!.overhang).toBe(0);
@@ -58,8 +73,8 @@ describe('火箭外形生成', () => {
   });
 
   it('飞船使用返回舱外形；有发动机的飞船带尾焰出口，无动力返回舱没有', () => {
-    const frontier = VEHICLE_CATALOG.find((v) => v.id === 'frontier-1')!;
-    const meteor = VEHICLE_CATALOG.find((v) => v.id === 'meteor-s')!;
+    const frontier = REFERENCE_VEHICLES['frontier-1'];
+    const meteor = REFERENCE_VEHICLES['meteor-s'];
     const layout = buildRocketLayout(frontier);
     const capsule = layout.sections.find((s) => s.kind === 'capsule')!;
     expect(capsule.plumes).toHaveLength(1);

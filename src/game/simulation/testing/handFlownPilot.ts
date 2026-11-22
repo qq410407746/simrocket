@@ -38,8 +38,16 @@ export interface HandFlownOptions {
   readonly targetAltitude: number;
   /** 起飞后倾斜的角度 [°]。 */
   readonly kickAngleDeg: number;
+  /** 开始倾斜的地速 [m/s]；缺省 60。推重比低的火箭要晚一些、轻一些地倾斜。 */
+  readonly kickSpeed?: number;
   /** 倾斜的方向（航向，从正北起顺时针）[°]；缺省 90 即正东。取整到 45° 的倍数（键盘的八个方向）。 */
   readonly kickHeadingDeg?: number;
+  /**
+   * 精确的倾斜方位角 [°]。给出时，起飞倾斜分别按住南北向（W / S）与东西向（D / A）的键，
+   * 各自按到该方向上的倾斜分量为止——相当于玩家盯着导航球的航向读数，先松开其中一个键。
+   * 之后压低 / 抬高头部仍用 kickHeadingDeg 取整得到的那组键。
+   */
+  readonly kickAzimuthDeg?: number;
   /** 上面级飞行时两次调整俯仰角之间的间隔 [s]。 */
   readonly decisionInterval?: number;
   /** 每次调整俯仰角的台阶 [°]。 */
@@ -51,6 +59,13 @@ export interface HandFlownOptions {
    * 向北飞（升段）时左偏增大倾角，向南飞（降段）时右偏增大倾角。
    */
   readonly inclination?: { readonly target: number; readonly increase: 'left' | 'right' };
+  /**
+   * 最大动压附近收节流：一级工作时动压超过 limit [Pa] 就把节流阀收到 throttle，降回 limit 以下再推回 100%
+   * （宇宙神 V 的 RD-180 就是这样穿过最大动压区的）。不填表示不收节流。
+   */
+  readonly maxQThrottle?: { readonly limit: number; readonly throttle: number };
+  /** 一级末段过载超过该值 [g] 时，按比例收节流（不低于发动机最低节流）。不填表示不限过载。 */
+  readonly maxGLoad?: number;
 }
 
 export type HandFlownStatus = 'ascending' | 'orbit' | 'out-of-propellant' | 'ended';
@@ -67,6 +82,8 @@ export class HandFlownPilot {
   private phaseStart = 0;
   private pitchTarget = 90;
   private nextDecision = 0;
+  /** 分量倾斜：次要方向按键的占空比累加器。 */
+  private kickDuty = 0;
   private steps = 0;
   /** 压低头部用的按键组合（俯仰 / 偏航各为 −1、0 或 1）；抬高头部用它的反向。 */
   private readonly kickKeys: KeyCombo;
@@ -78,7 +95,7 @@ export class HandFlownPilot {
   private tapTicks = 0;
   private readonly sim: Simulation;
   private readonly config: SimulationConfig;
-  private readonly options: Required<Omit<HandFlownOptions, 'inclination'>> & Pick<HandFlownOptions, 'inclination'>;
+  private readonly options: Required<Omit<HandFlownOptions, 'inclination' | 'kickAzimuthDeg' | 'maxQThrottle' | 'maxGLoad'>> & Pick<HandFlownOptions, 'inclination' | 'kickAzimuthDeg' | 'maxQThrottle' | 'maxGLoad'>;
 
   /** 飞行中见到的最大动压 [Pa] 与最大过载 [g]（按界面刷新率采样）。 */
   maxDynamicPressure = 0;
@@ -87,7 +104,7 @@ export class HandFlownPilot {
   constructor(sim: Simulation, config: SimulationConfig, options: HandFlownOptions) {
     this.sim = sim;
     this.config = config;
-    this.options = { decisionInterval: 3, pitchStepDeg: 5, cutoffPeriapsis: 150_000, kickHeadingDeg: 90, ...options };
+    this.options = { decisionInterval: 3, pitchStepDeg: 5, cutoffPeriapsis: 150_000, kickHeadingDeg: 90, kickSpeed: 60, ...options };
     // 发射台上 W（俯仰 +1）向北、D（偏航 +1）向东
     this.kickKeys = comboForHeading(this.options.kickHeadingDeg);
     this.leftKeys = leftOfCombo(this.kickKeys);
@@ -131,6 +148,15 @@ export class HandFlownPilot {
       }
       return 'ascending';
     }
+    // —— 节流：一级工作时按动压收放 ——
+    const bucket = options.maxQThrottle;
+    if ((bucket || options.maxGLoad) && active === 0 && t.thrust > 0) {
+      let wanted = bucket && t.dynamicPressure > bucket.limit ? bucket.throttle : 1;
+      // 过载限制：推力按比例收小（玩家看着过载读数往回拉节流阀）
+      if (options.maxGLoad && t.gLoad > 0) wanted = Math.min(wanted, (t.throttle * options.maxGLoad) / t.gLoad);
+      wanted = Math.max(0.01, Math.min(1, Math.round(wanted * 20) / 20));
+      if (Math.abs(t.throttle - wanted) > 1e-6) sim.setThrottle(wanted);
+    }
     // —— F：出了大气层就抛整流罩 ——
     if (t.fairingAttached && t.altitude > 100_000) sim.jettisonFairing();
     // —— X：近地点读数达到目标就关机 ——
@@ -142,12 +168,33 @@ export class HandFlownPilot {
 
     switch (this.phase) {
       case 'vertical':
-        if (t.surfaceSpeed >= 60) {
+        if (t.surfaceSpeed >= options.kickSpeed) {
           this.phase = 'kick';
-          sim.setAttitudeInput({ pitch: this.kickKeys.pitch, yaw: this.kickKeys.yaw, roll: 0 });
+          if (options.kickAzimuthDeg === undefined) sim.setAttitudeInput({ pitch: this.kickKeys.pitch, yaw: this.kickKeys.yaw, roll: 0 });
         }
         break;
       case 'kick':
+        if (options.kickAzimuthDeg !== undefined) {
+          // 分量倾斜：一直按住分量大的那个方向的键，另一个方向的键按比例间断点按（每 0.1 s 决定一次），
+          // 两个方向的倾斜速率之比等于方位角的正切，合成后的航向就是 kickAzimuthDeg。
+          if (pitch <= 90 - options.kickAngleDeg) {
+            sim.setAttitudeInput({ pitch: 0, yaw: 0, roll: 0 });
+            this.phase = 'settle';
+            this.phaseStart = sim.time;
+            break;
+          }
+          const az = options.kickAzimuthDeg * (Math.PI / 180);
+          const north = Math.cos(az);
+          const east = Math.sin(az);
+          const major = Math.max(Math.abs(north), Math.abs(east));
+          this.kickDuty += Math.min(Math.abs(north), Math.abs(east)) / major;
+          const tapMinor = this.kickDuty >= 1;
+          if (tapMinor) this.kickDuty -= 1;
+          const northKey = Math.abs(north) >= Math.abs(east) || tapMinor ? Math.sign(north) : 0;
+          const eastKey = Math.abs(east) > Math.abs(north) || tapMinor ? Math.sign(east) : 0;
+          sim.setAttitudeInput({ pitch: northKey, yaw: eastKey, roll: 0 });
+          break;
+        }
         if (pitch <= 90 - options.kickAngleDeg) {
           sim.setAttitudeInput({ pitch: 0, yaw: 0, roll: 0 });
           this.phase = 'settle';

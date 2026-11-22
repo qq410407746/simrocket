@@ -24,7 +24,7 @@ import type { Quat } from '../math/quat';
 import { type Vec3, ZERO, cross, dot, length, negate, normalize, scale, sub, vec3 } from '../math/vec3';
 import type { AttitudeControlParams } from './attitude';
 
-export type AttitudeMode = 'manual' | 'prograde' | 'retrograde' | 'normal' | 'antinormal' | 'radial-out' | 'radial-in' | 'trim';
+export type AttitudeMode = 'manual' | 'prograde' | 'retrograde' | 'normal' | 'antinormal' | 'radial-out' | 'radial-in' | 'trim' | 'maneuver';
 
 export const ATTITUDE_MODES: readonly AttitudeMode[] = [
   'manual',
@@ -35,6 +35,7 @@ export const ATTITUDE_MODES: readonly AttitudeMode[] = [
   'radial-out',
   'radial-in',
   'trim',
+  'maneuver',
 ];
 
 export const isAttitudeMode = (value: unknown): value is AttitudeMode =>
@@ -99,7 +100,7 @@ export const trimDirection = (r: Vec3, v: Vec3, trim: TrimAttitude): Vec3 | null
  * @param trim 'trim' 模式使用的配平迎角与倾侧角
  */
 export const pointingDirection = (mode: AttitudeMode, r: Vec3, v: Vec3, trim: TrimAttitude = NO_TRIM): Vec3 | null => {
-  if (mode === 'manual') return null;
+  if (mode === 'manual' || mode === 'maneuver') return null;
   if (mode === 'trim') return trimDirection(r, v, trim);
   if (mode === 'prograde' || mode === 'retrograde') {
     const reference = referenceVelocity(r, v);

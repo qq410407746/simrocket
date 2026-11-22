@@ -10,7 +10,7 @@
  * 模型坐标：+Y 沿箭体纵轴指向头部，y = 0 为分段底面；单位 m。
  * 与机体系的关系：模型 +Y = 机体 +X，模型 +X = 机体 −Y，模型 +Z = 机体 +Z。
  */
-import { CAPSULE_PROFILE } from '@/game/vehicles/analysis';
+import { CAPSULE_PROFILE, isParallel, stackLength } from '@/game/vehicles/analysis';
 import type { CapsuleDefinition, SatelliteDefinition, StageDefinition, VehicleDefinition } from '@/game/vehicles/types';
 
 export type RocketMaterial = 'paint' | 'dark' | 'accent' | 'nozzle' | 'heatShield' | 'metal' | 'foil' | 'solar';
@@ -67,6 +67,11 @@ export interface RocketSection {
   readonly stageIndex: number;
   /** kind 为 'fairing' 时：+1 为模型 +X 一侧的半罩，−1 为另一侧；否则为 0。 */
   readonly half: -1 | 0 | 1;
+  /** 并联助推器组中的第几个助推器；其余分段为 0。 */
+  readonly unit: number;
+  /** 分段轴线在横截面内相对箭体轴线的位置 [m]（模型 X、Z）：并联助推器绕在芯级周围，其余为 0。 */
+  readonly offsetX: number;
+  readonly offsetZ: number;
   /** 分段底面在整箭（满构型）中的高度 [m]。 */
   readonly baseY: number;
   /** 分段的名义长度 [m]（与物理定义一致）。 */
@@ -139,7 +144,8 @@ const buildStage = (vehicle: VehicleDefinition, index: number, baseY: number): R
   const { positions, radius: nozzleRadius } = nozzleArrangement(stage.engineCount, exitRadius, radius);
 
   let bodyStart: number;
-  if (index === 0) {
+  // 最底下一级，或绑着并联助推器的芯级：喷管露在外面
+  if (index === 0 || isParallel(vehicle.stages[index - 1])) {
     // 底级：喷管从尾段伸出一部分
     const nozzleLength = Math.min(nozzleRadius * 2.6, length * 0.12);
     bodyStart = nozzleLength * 0.5;
@@ -203,7 +209,50 @@ const buildStage = (vehicle: VehicleDefinition, index: number, baseY: number): R
     material: 'dark',
   });
 
-  return { id: stage.id, kind: 'stage', stageIndex: index, half: 0, baseY, length, overhang, parts, plumes };
+  return { id: stage.id, kind: 'stage', stageIndex: index, half: 0, unit: 0, offsetX: 0, offsetZ: 0, baseY, length, overhang, parts, plumes };
+};
+
+/**
+ * 并联助推器中的一个：底部露出喷管，顶部是锥形头锥，绕芯级轴线排在 angle 方向。
+ * 物理定义里发动机台数是整组合计，这里每个助推器画 engineCount / count 台。
+ */
+const buildBooster = (vehicle: VehicleDefinition, index: number, baseY: number, unit: number): RocketSection => {
+  const stage = vehicle.stages[index] as StageDefinition;
+  const count = stage.parallel?.count ?? 1;
+  const core = vehicle.stages[index + 1];
+  const radius = stage.geometry.diameter / 2;
+  const length = stage.geometry.length;
+  const ring = (core ? core.geometry.diameter / 2 : 0) + radius;
+  const angle = (2 * Math.PI * unit) / count;
+  const parts: RocketPart[] = [];
+  const plumes: PlumeExit[] = [];
+  const exitRadius = Math.sqrt(stage.engine.nozzleExitArea / Math.PI);
+  const { positions, radius: nozzleRadius } = nozzleArrangement(Math.max(1, Math.round(stage.engineCount / count)), exitRadius, radius);
+  const nozzleLength = Math.min(nozzleRadius * 2.6, length * 0.12);
+  const bodyStart = nozzleLength * 0.5;
+  for (const [x, z] of positions) {
+    parts.push({ kind: 'nozzle', x, z, y: 0, length: nozzleLength, exitRadius: nozzleRadius, throatRadius: nozzleRadius * 0.38 });
+    plumes.push({ x, y: 0, z, radius: nozzleRadius });
+  }
+  parts.push({ kind: 'lathe', profile: [[0, bodyStart + 0.02], [radius * 0.97, bodyStart + 0.02], [radius, bodyStart]], material: 'dark' });
+  const coneStart = length * 0.72;
+  parts.push(cylinder(radius, bodyStart, coneStart, 'paint'));
+  // 锥形头锥（联盟号助推器的典型外形），顶端贴着芯级
+  parts.push({ kind: 'lathe', profile: [[radius, coneStart], [radius * 0.45, length * 0.97], [radius * 0.2, length]], material: 'paint' });
+  return {
+    id: `${stage.id}-${unit}`,
+    kind: 'stage',
+    stageIndex: index,
+    half: 0,
+    unit,
+    offsetX: ring * Math.sin(angle),
+    offsetZ: ring * Math.cos(angle),
+    baseY,
+    length,
+    overhang: 0,
+    parts,
+    plumes,
+  };
 };
 
 const buildCapsule = (capsule: CapsuleDefinition, baseY: number): RocketSection => {
@@ -227,7 +276,7 @@ const buildCapsule = (capsule: CapsuleDefinition, baseY: number): RocketSection 
   ];
   // 飞船机动发动机的安装位置为简化处理：推力沿纵轴，尾焰从底部中心画出。
   const plumes: PlumeExit[] = capsule.engine ? [{ x: 0, y: 0, z: 0, radius: Math.max(0.12, r * 0.09) }] : [];
-  return { id: capsule.id, kind: 'capsule', stageIndex: -1, half: 0, baseY, length: h, overhang: 0, parts, plumes };
+  return { id: capsule.id, kind: 'capsule', stageIndex: -1, half: 0, unit: 0, offsetX: 0, offsetZ: 0, baseY, length: h, overhang: 0, parts, plumes };
 };
 
 /** 防热大底：单独的分段，可以被抛掉（朝下，发射时坐落在上面级顶部）。 */
@@ -239,6 +288,9 @@ const buildHeatShield = (capsule: CapsuleDefinition, baseY: number): RocketSecti
     kind: 'heat-shield',
     stageIndex: -1,
     half: 0,
+    unit: 0,
+    offsetX: 0,
+    offsetZ: 0,
     baseY,
     length: h * CAPSULE_PROFILE.shieldHeight,
     overhang: 0,
@@ -270,7 +322,7 @@ const buildSatellite = (satellite: SatelliteDefinition, baseY: number): RocketSe
     // 顶部天线
     { kind: 'lathe', profile: [[0.06, adapter + busHeight], [0.06, adapter + busHeight + h * 0.08], [w * 0.42, h * 0.97], [w * 0.44, h]], material: 'paint' },
   ];
-  return { id: satellite.id, kind: 'satellite', stageIndex: -1, half: 0, baseY, length: h, overhang: 0, parts, plumes: [] };
+  return { id: satellite.id, kind: 'satellite', stageIndex: -1, half: 0, unit: 0, offsetX: 0, offsetZ: 0, baseY, length: h, overhang: 0, parts, plumes: [] };
 };
 
 const buildFairingHalf = (satellite: SatelliteDefinition, stageRadius: number, baseY: number, half: 1 | -1): RocketSection => {
@@ -305,6 +357,9 @@ const buildFairingHalf = (satellite: SatelliteDefinition, stageRadius: number, b
     kind: 'fairing',
     stageIndex: -1,
     half,
+    unit: 0,
+    offsetX: 0,
+    offsetZ: 0,
     baseY,
     length: h,
     overhang: 0,
@@ -318,8 +373,16 @@ export const buildRocketLayout = (vehicle: VehicleDefinition): RocketLayout => {
   let y = 0;
   let maxRadius = 0;
   vehicle.stages.forEach((stage, i) => {
+    if (isParallel(stage)) {
+      // 并联助推器：与芯级底面齐平，绕在芯级周围，不增加高度
+      const count = stage.parallel?.count ?? 1;
+      const core = vehicle.stages[i + 1];
+      for (let k = 0; k < count; k++) sections.push(buildBooster(vehicle, i, y, k));
+      maxRadius = Math.max(maxRadius, (core ? core.geometry.diameter / 2 : 0) + stage.geometry.diameter);
+      return;
+    }
     sections.push(buildStage(vehicle, i, y));
-    y += stage.geometry.length;
+    y += stackLength(stage);
     maxRadius = Math.max(maxRadius, stage.geometry.diameter / 2);
   });
   const topStage = vehicle.stages[vehicle.stages.length - 1];

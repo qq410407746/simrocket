@@ -50,13 +50,13 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-const orbitConfig = createFlightConfig(getVehicleOrDefault('frontier-1'), launchSiteGeodetic(getLaunchSiteOrDefault('cape-canaveral')), 'orbit');
+const orbitConfig = createFlightConfig(getVehicleOrDefault('soyuz-2-1a'), launchSiteGeodetic(getLaunchSiteOrDefault('baikonur')), 'orbit');
 const simulation = new Simulation(orbitConfig);
 const telemetry = deriveTelemetry(buildSnapshot(simulation, { seq: 0, timeWarp: 1, paused: false, simRate: 1 }), orbitConfig);
 const stats = simulation.flightStats;
 const baseLog = buildLogEntry({
   id: 'test-flight', date: '2026-11-14T12:00:00.000Z', missionId: 'first-orbit',
-  vehicleId: 'frontier-1', siteId: 'cape-canaveral', start: 'orbit', telemetry, stats,
+  vehicleId: 'soyuz-2-1a', siteId: 'baikonur', start: 'orbit', telemetry, stats,
   outcome: null, mission: null, score: null,
 });
 
@@ -153,7 +153,7 @@ describe('mission result presentation', () => {
       expect(score.items[0]!.label).toMatch(/\p{Script=Han}/u);
     }
     useGameStore.setState({ language: 'zh' });
-    expect(render(FlightSummary)).toContain('极地轨道');
+    expect(render(FlightSummary)).toContain('同步通信卫星');
     expect(render(FlightSummary)).toContain('最好成绩');
   });
 });
@@ -191,18 +191,19 @@ describe('flight log presentation', () => {
     ];
     useCareerStore.setState({ logbook: entries });
     const html = render(LogbookMenu);
+    expect(html).toContain('View telemetry curves');
     expect(html).not.toMatch(/\p{Script=Han}/u);
     expect(html).toContain('First Orbit');
     expect(html).toContain('Crew Return');
     expect(html).toContain('Free flight');
-    expect(html).toContain('Frontier-1');
-    expect(html).toContain('Cape Canaveral');
+    expect(html).toContain('Soyuz-2.1a');
+    expect(html).toContain('Baikonur');
     expect(html).toContain('Clear mission progress and flight log');
     expect(html.match(/data-testid="logbook-entry"/g)).toHaveLength(entries.length);
     expect(useCareerStore.getState().logbook).toBe(entries);
     useGameStore.setState({ language: 'zh' });
     expect(render(LogbookMenu)).toContain('载人飞船返回');
-    expect(render(LogbookMenu)).toContain('卡纳维拉尔角');
+    expect(render(LogbookMenu)).toContain('拜科努尔');
   });
 });
 
@@ -214,7 +215,7 @@ describe('mission menu presentation', () => {
     expect(html).not.toMatch(/\p{Script=Han}/u);
     expect(html).toContain('Best result');
     expect(html).toContain(' · 1 flight</span>');
-    expect(render(MissionList)).toContain('Completed 1 / 7');
+    expect(render(MissionList)).toContain('Completed 1 / 8');
     useCareerStore.setState({ progress: { 'karman-line': { ...record, attempts: 2 } } });
     expect(render(MissionBriefing)).toContain(' · 2 flights</span>');
     useCareerStore.setState({ progress: { 'karman-line': { ...record, completed: false, bestGrade: null } } });
@@ -225,7 +226,7 @@ describe('mission menu presentation', () => {
     const list = render(MissionList);
     expect(list).toContain('Missions');
     expect(list).not.toMatch(/\p{Script=Han}/u);
-    expect(list.match(/data-testid="mission-(?:karman-line|suborbital-hop|first-orbit|crew-return|orbital-flight|inclined-orbit|polar-orbit)"/g)).toHaveLength(7);
+    expect(list.match(/data-testid="mission-(?:karman-line|suborbital-hop|first-orbit|crew-return|orbital-flight|inclined-orbit|polar-orbit|geo-deployment)"/g)).toHaveLength(8);
 
     for (const mission of MISSION_CATALOG) {
       useGameStore.setState({ selectedMissionId: mission.id });
@@ -236,11 +237,13 @@ describe('mission menu presentation', () => {
       expect(briefing).toContain('Scoring (out of 100)');
       expect(briefing).toContain('Objectives');
     }
+    expect(render(MissionBriefing)).toContain('Complete first: First Orbit');
+    useGameStore.setState({ selectedMissionId: 'polar-orbit' });
     expect(render(MissionBriefing)).toContain('Complete first: Target Inclination');
     expect(render(MissionBriefing)).toContain('Theoretical launch azimuth');
 
     useGameStore.setState({ language: 'zh', selectedMissionId: 'karman-line' });
-    expect(render(MissionList)).toContain('流星-S');
+    expect(render(MissionList)).toContain('水星-红石');
     expect(render(MissionBriefing)).toContain('突破卡门线');
     expect(render(MissionBriefing)).toContain('附加目标');
   });
@@ -263,16 +266,17 @@ describe('localizeMission', () => {
     }
   });
 
-  it('completely translates all seven missions without changing any gameplay data', () => {
+  it('completely translates all eight missions without changing any gameplay data', () => {
     const original = structuredClone(MISSION_CATALOG);
     const expected = [
       ['karman-line', 'Cross the Kármán Line', 3, 2, 3, 5],
       ['suborbital-hop', 'Suborbital Flight and Recovery', 4, 2, 4, 5],
-      ['first-orbit', 'First Orbit', 4, 1, 4, 5],
+      ['first-orbit', 'First Orbit', 4, 1, 3, 5],
       ['crew-return', 'Crew Return', 4, 1, 4, 5],
       ['orbital-flight', 'Crewed Orbital Flight', 3, 2, 5, 4],
       ['inclined-orbit', 'Target Inclination', 4, 1, 5, 5],
       ['polar-orbit', 'Polar Orbit', 4, 1, 5, 5],
+      ['geo-deployment', 'Orbital Frontier: Geostationary Communications Satellite', 4, 5, 3, 6],
     ];
     const localized = MISSION_CATALOG.map((mission) => localizeMission(mission, 'en'));
     expect(localized.map((mission) => [
@@ -285,7 +289,7 @@ describe('localizeMission', () => {
       scoring: counts.scoring + mission.scoring.length,
       flightPlan: counts.flightPlan + mission.flightPlan.length,
     }), { missions: 0, briefing: 0, objectives: 0, scoring: 0, flightPlan: 0 })).toEqual({
-      missions: 7, briefing: 26, objectives: 10, scoring: 30, flightPlan: 34,
+      missions: 8, briefing: 30, objectives: 15, scoring: 32, flightPlan: 40,
     });
 
     localized.forEach((mission, index) => {
@@ -317,4 +321,12 @@ describe('localizeMission', () => {
     expect(localized[3]!.flightPlan.join(' ')).toContain('0–50 km');
     expect(localized[1]!.flightPlan.join(' ')).toContain('300 m/s');
   });
+});
+
+it('高级轨道任务也有英文文本，且没有改变任务定义', () => {
+  const mission = MISSION_CATALOG.find((m) => m.id === 'geo-deployment')!;
+  const localized = localizeMission(mission, 'en');
+  expect(localized.title).toContain('Geostationary');
+  expect(localized.objectives.map((o) => o.spec)).toEqual(mission.objectives.map((o) => o.spec));
+  expect(localizeMission(mission, 'zh')).toBe(mission);
 });

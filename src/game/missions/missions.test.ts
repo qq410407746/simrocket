@@ -5,7 +5,8 @@
 import { describe, expect, it } from 'vitest';
 import { findLaunchSite, getLaunchSiteOrDefault, launchSiteGeodetic } from '@/data/launchSites';
 import { MISSION_CATALOG, findMission } from '@/data/missions';
-import { findVehicle, getVehicleOrDefault } from '@/data/vehicles';
+import { findVehicle } from '@/data/vehicles';
+import { referenceVehicleById } from '@/data/testing/referenceVehicles';
 import { DEG2RAD, RAD2DEG } from '../physics/constants';
 import { reachableInclination } from '../physics/orbital/launch';
 import { Simulation } from '../simulation/Simulation';
@@ -31,7 +32,8 @@ import {
 import type { MissionDefinition, MissionScore, MissionState } from './types';
 
 const mission = (id: string): MissionDefinition => findMission(id) as MissionDefinition;
-const frontier = getVehicleOrDefault('frontier-1');
+/** 任务判定只看遥测：用固定的参考构型生成一份真实的在轨遥测。 */
+const frontier = referenceVehicleById('frontier-1');
 const cape = launchSiteGeodetic(getLaunchSiteOrDefault('cape-canaveral'));
 
 /** 从轨道出发的边疆一号的真实遥测：200 km 圆轨道，二级还连着，发动机关着。 */
@@ -337,25 +339,24 @@ describe('评分', () => {
     scoreMission(firstOrbit, state, missionMetrics(firstOrbit, state, input(at(460), { maxGLoad })));
 
   it('首次入轨：各项得分按指标线性换算，总分四舍五入', () => {
-    // 粗糙的飞行：150 × 221 km，剩余 3037 m/s，最大过载 6.25 g
-    const rough = scoreOf(confirmed(71, 3_037), 6.25);
-    expect(rough.items.map((i) => i.id)).toEqual(['objectives', 'circular', 'margin', 'g']);
+    // 粗糙的飞行：150 × 221 km，剩余 229 m/s
+    const rough = scoreOf(confirmed(71, 229), 4.4);
+    expect(rough.items.map((i) => i.id)).toEqual(['objectives', 'circular', 'margin']);
     const points = Object.fromEntries(rough.items.map((i) => [i.id, i.points]));
-    expect(points.objectives).toBe(50);
+    expect(points.objectives).toBe(55);
     expect(points.circular).toBeCloseTo((20 * (300 - 71)) / 280, 9);
-    expect(points.margin).toBe(15);
-    expect(points.g).toBeCloseTo(15 * 0.5, 9);
-    expect(rough.total).toBe(89);
+    expect(points.margin).toBeCloseTo((25 * (229 - 100)) / 230, 9);
+    expect(rough.total).toBe(85);
     expect(rough.grade).toBe('A');
-    expect(rough.items.find((i) => i.id === 'g')).toMatchObject({ metric: 'max-g', value: 6.25, weight: 15 });
+    expect(rough.items.find((i) => i.id === 'margin')).toMatchObject({ metric: 'delta-v-margin', value: 229, weight: 25 });
     expect(rough.items.find((i) => i.id === 'objectives')).toMatchObject({ metric: null, value: null, fraction: 1 });
-    // 收了节流、轨道更圆：满分
-    const clean = scoreOf(confirmed(15, 3_050), 4.6);
+    // 轨道更圆、只靠第三级入轨：满分
+    const clean = scoreOf(confirmed(15, 340), 4.4);
     expect(clean.total).toBe(100);
     expect(clean.grade).toBe('S');
-    // 勉强入轨：很椭圆、余量少、过载大
-    const poor = scoreOf(confirmed(440, 1_400), 8);
-    expect(poor.total).toBe(50);
+    // 勉强入轨：很椭圆、动用了飞船的推进剂
+    const poor = scoreOf(confirmed(440, 90), 4.4);
+    expect(poor.total).toBe(55);
     expect(poor.grade).toBe('C');
   });
 
@@ -364,9 +365,9 @@ describe('评分', () => {
     const score = scoreMission(firstOrbit, active, missionMetrics(firstOrbit, active, input(at(100), { maxGLoad: 3 })));
     expect(score.total).toBe(0);
     expect(score.grade).toBe('F');
-    expect(score.items).toHaveLength(4);
+    expect(score.items).toHaveLength(3);
     expect(score.items.find((i) => i.id === 'objectives')?.fraction).toBe(0);
-    expect(score.items.find((i) => i.id === 'g')?.fraction).toBe(1);
+    expect(score.items.find((i) => i.id === 'margin')?.fraction).toBe(0);
   });
 
   it('附加目标作为单独的评分项', () => {
@@ -400,6 +401,7 @@ describe('任务进度与解锁', () => {
       'first-orbit',
       'crew-return',
       'inclined-orbit',
+      'geo-deployment',
     ]);
     expect(completedCount(MISSION_CATALOG, progress)).toBe(3);
     // "全部解锁"开关
@@ -700,5 +702,42 @@ describe('任务目录的自洽性', () => {
       expect(m.launch?.inclination, m.id).toBe(requirement.inclination.target);
       expect(requirement.inclination.tolerance, m.id).toBeGreaterThan(1 * DEG2RAD);
     }
+  });
+});
+
+
+describe('高级任务的顺序与连续确认', () => {
+  const geo = mission('geo-deployment');
+  it('NaN 不能满足轨道条件；采样之间的短点火会重新开始十秒确认', () => {
+    const first = mission('first-orbit');
+    expect(orbitMeets(withOrbit({ periapsisAltitude: NaN }), missionOrbitRequirement(first)!)).toBe(false);
+    let state = createMissionState(first);
+    state = updateMission(first, state, input(at(100)));
+    state = updateMission(first, state, input(at(115, { lastOrbitChangeTime: 112 })));
+    expect(state.status).toBe('active');
+    expect(state.orbitHoldSince).toBe(115);
+    state = updateMission(first, state, input(at(125, { lastOrbitChangeTime: 112 })));
+    expect(state.status).toBe('success');
+  });
+  it('停泊轨道和 GTO 分别保持十秒，不能继承前一目标的计时', () => {
+    let state = createMissionState(geo);
+    state = feed(geo, state, [input(at(100)), input(at(110))]);
+    expect(state.objectives[0]?.status).toBe('done');
+    const gtoOrbit = withOrbit({ periapsisAltitude: 200_000, apoapsisAltitude: 35_793_000 });
+    state = updateMission(geo, state, input(at(200, { orbit: gtoOrbit })));
+    expect(state.objectives[1]?.status).toBe('pending');
+    expect(orbitHoldProgress(state, 205)).toBeCloseTo(0.5);
+    state = updateMission(geo, state, input(at(210, { orbit: gtoOrbit })));
+    expect(state.objectives[1]?.status).toBe('done');
+    expect(state.objectives.slice(2).every((o) => o.status === 'pending')).toBe(true);
+  });
+  it('错误轨道上提前部署且已无推进能力时失败，不会无限等待 GEO', () => {
+    let state = feed(geo, createMissionState(geo), [input(at(100)), input(at(110))]);
+    const orbit = withOrbit({ periapsisAltitude: 200_000, apoapsisAltitude: 35_793_000 });
+    state = feed(geo, state, [input(at(200, { orbit })), input(at(210, { orbit }))]);
+    state = updateMission(geo, state, input(at(220, { orbit, satelliteDeployedAt: 215, remainingDeltaV: 0,
+      synchronous: { gso: false, geo: false, longitudeSpan: null, periodError: 50_000 } })));
+    expect(state.status).toBe('failed');
+    expect(state.failure).toBe('out-of-propellant');
   });
 });

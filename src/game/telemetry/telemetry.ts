@@ -2,6 +2,7 @@
  * 遥测量推导：把原始物理状态换算成仪表显示用的物理量（仍为 SI 单位）。
  * 纯函数，UI 层只做单位换算与格式化。
  */
+import { synchronousDiagnostics } from '../physics/orbital/advanced';
 import type { AttitudeMode } from '../physics/attitude/pointing';
 import { EARTH, KARMAN_LINE_ALTITUDE, STANDARD_GRAVITY } from '../physics/constants';
 import {
@@ -89,6 +90,9 @@ export const deriveOrbit = (position: Vec3, velocity: Vec3): OrbitTelemetry => {
 };
 
 export interface Telemetry {
+  readonly synchronous?: ReturnType<typeof synchronousDiagnostics>;
+  readonly satelliteDeployedAt?: number | null;
+  readonly lastOrbitChangeTime?: number;
   readonly simTime: number;
   /** 任务时间 [s]：自起飞起经过的时间；尚未起飞时为 null。 */
   readonly missionTime: number | null;
@@ -203,6 +207,9 @@ export const deriveTelemetry = (snapshot: SimSnapshot, config: SimulationConfig)
   const chute = configurationParachute(config.vehicle, vehicle);
 
   return {
+    synchronous: vehicle.phase === 'flight' ? synchronousDiagnostics(position, velocity) : undefined,
+    satelliteDeployedAt: snapshot.satelliteDeployedAt ?? null,
+    lastOrbitChangeTime: snapshot.lastOrbitChangeTime,
     simTime: snapshot.simTime,
     missionTime: snapshot.liftoffTime === null ? null : snapshot.simTime - snapshot.liftoffTime,
     phase: vehicle.phase,

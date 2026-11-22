@@ -4,6 +4,7 @@
  * 判定、评分与日志条目的构造都在 game/missions 里（纯函数）；这里只负责保存与读回。
  * 读回时逐项校验：旧版本或被改坏的存档不会让界面出错，无法识别的部分被丢弃。
  */
+import { eraseFlightArchives } from './archiveStore';
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { MISSION_CATALOG } from '@/data/missions';
@@ -36,7 +37,7 @@ export const useCareerStore = create<CareerState>()(
         set((state) => ({ progress: recordMissionResult(state.progress, missionId, score, success) })),
       saveFlight: (entry) => set((state) => ({ logbook: upsertLogEntry(state.logbook, entry) })),
       setUnlockAll: (unlockAll) => set({ unlockAll }),
-      resetCareer: () => set({ progress: {}, logbook: [] }),
+      resetCareer: () => { set({ progress: {}, logbook: [] }); void eraseFlightArchives(); },
     }),
     {
       name: 'orbital-frontier/career',
