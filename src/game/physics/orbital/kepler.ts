@@ -96,7 +96,8 @@ export const propagateKepler = (r0: Vec3, v0: Vec3, dt: number, mu: number = EAR
   } else {
     chi = (sqrtMu * t) / r0Mag;
   }
-  if (!Number.isFinite(chi) || chi === 0) chi = (sqrtMu * t) / r0Mag;
+  // 对数初值是长时间跨度的渐近式：时间较短时对数的自变量 < 1，给出的 χ 与 t 反号，必须改用线性初值
+  if (!Number.isFinite(chi) || chi === 0 || Math.sign(chi) !== sign) chi = (sqrtMu * t) / r0Mag;
 
   // 牛顿迭代，以逐步收紧的包围区间兜底。F(χ) 单调递增（F' = r > 0）且 F(0) = −√μ·t，
   // 所以根与 t 同号：一侧的界从一开始就是 0。
@@ -117,7 +118,8 @@ export const propagateKepler = (r0: Vec3, v0: Vec3, dt: number, mu: number = EAR
       next = chi - f / slope;
       // 牛顿步跳出包围区间时改用二分（或在只有单侧界时加倍）
       if (!Number.isFinite(next) || next <= lo || next >= hi) {
-        next = Number.isFinite(lo) && Number.isFinite(hi) ? (lo + hi) / 2 : chi * 2;
+        // 只有单侧界时朝着没有界的一侧加倍（根与 t 同号）
+        next = Number.isFinite(lo) && Number.isFinite(hi) ? (lo + hi) / 2 : t > 0 ? Math.max(2 * Math.abs(chi), 2 * lo) : Math.min(-2 * Math.abs(chi), 2 * hi);
       }
     }
     const converged = Math.abs(next - chi) <= RELATIVE_TOLERANCE * Math.max(1, Math.abs(next));

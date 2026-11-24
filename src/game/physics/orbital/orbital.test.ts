@@ -330,6 +330,25 @@ describe('Stumpff 函数', () => {
 });
 
 describe('开普勒解析传播', () => {
+  it('回归：双曲线、时间跨度短于渐近初值适用范围时也收敛（旅行者 2 号土星—天王星段的日心状态）', () => {
+    // 修复前对数初值与 t 反号，单侧加倍发散成 Infinity
+    const mu = 1.32712440042e20;
+    const r0 = vec3(-7.9e11, 1.1e11, 3.0e10);
+    const v0 = vec3(-2.6e3, -1.94e4, 1.0e2);
+    const alpha = 2 / length(r0) - dot(v0, v0) / mu;
+    expect(alpha).toBeLessThan(0);
+    const energy = (r: Vec3, v: Vec3) => dot(v, v) / 2 - mu / length(r);
+    const h0 = cross(r0, v0);
+    for (const dt of [1e3, 8.4e5, 1e7, 6.7e7]) {
+      const s = propagateKepler(r0, v0, dt, mu);
+      expect(Number.isFinite(s.position.x) && Number.isFinite(s.velocity.y)).toBe(true);
+      expect(Math.abs(energy(s.position, s.velocity) - energy(r0, v0)) / Math.abs(energy(r0, v0))).toBeLessThan(1e-9);
+      expect(distance(cross(s.position, s.velocity), h0) / length(h0)).toBeLessThan(1e-9);
+      const back = propagateKepler(s.position, s.velocity, -dt, mu);
+      expect(distance(back.position, r0) / length(r0)).toBeLessThan(1e-9);
+    }
+  });
+
   it('Curtis 例 3.7：60 分钟后的位置与速度', () => {
     const k = propagateKepler(vec3(7000e3, -12124e3, 0), vec3(2667.9, 4621.0, 0), 3600, 398600e9);
     expect(k.position.x / 1e3).toBeCloseTo(-3297.77, 1);

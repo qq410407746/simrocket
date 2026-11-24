@@ -1,6 +1,12 @@
 import { useMemo, useState } from 'react';
 import { CELESTIAL_BODIES, type BodyId, circularOrbitAt, findBody } from '@/data/celestialBodies';
 import { VEHICLE_CATALOG } from '@/data/vehicles';
+import { VOYAGER_ROUTES, type VoyagerRoute } from '@/data/voyagerReference';
+import { evaluateRoute } from '@/game/interplanetary/mga';
+import { type PlanetId, findPlanet } from '@/game/interplanetary/planets';
+import { RAD2DEG } from '@/game/physics/constants';
+import { unixMsFromJulianDate } from '@/game/physics/ephemeris/time';
+import { TrajectoryDiagram } from './TrajectoryDiagram';
 import { type Bilingual, type WikiArticle, type WikiBlock, type WikiCategory, type WikiWidget, WIKI_ARTICLES, WIKI_CATEGORY_LABEL, findWikiArticle } from '@/data/wiki';
 import { idealDeltaV } from '@/game/physics/propulsion/engine';
 import { analyzeVehicle } from '@/game/vehicles/analysis';
@@ -11,7 +17,7 @@ import { formatMass, formatNumber } from '@/utils/format';
 
 const pick = (text: Bilingual, language: Language): string => (language === 'en' ? text[1] : text[0]);
 
-const CATEGORIES: readonly WikiCategory[] = ['theory', 'bodies'];
+const CATEGORIES: readonly WikiCategory[] = ['theory', 'bodies', 'showcase'];
 
 /** 知识库目录：按"原理 / 天体"分组。 */
 export function WikiIndex() {
@@ -180,10 +186,81 @@ function OrbitCalculator() {
   );
 }
 
-const WIDGETS: Record<WikiWidget, () => React.JSX.Element> = {
+/** 旅行者号：用真实日期在本游戏的模型里重算借力飞越，与 JPL Horizons 中的真实轨迹并排对比。 */
+function VoyagerTour() {
+  const { language, t } = useI18n();
+  const [id, setId] = useState<VoyagerRoute['id']>('voyager2');
+  const route = VOYAGER_ROUTES.find((r) => r.id === id) ?? VOYAGER_ROUTES[0]!;
+  const solution = useMemo(() => {
+    const sequence: PlanetId[] = ['earth', ...route.encounters.map((e) => e.body)];
+    const dates = [route.launchJd, ...route.encounters.map((e) => e.jd)];
+    return evaluateRoute(sequence, dates, { parkingAltitude: 200_000, arrival: 'flyby', captureAltitude: 0, table: 'table1' });
+  }, [route]);
+  const name = (body: PlanetId) => (language === 'en' ? findPlanet(body).name : findPlanet(body).nameZh);
+  if (!solution) return null;
+  return (
+    <div className="flex flex-col gap-2 rounded-md border border-line/80 bg-void/40 p-2.5" data-testid="wiki-voyager">
+      <div className="flex gap-1" role="group" aria-label={t('选择飞船', 'Spacecraft')}>
+        {VOYAGER_ROUTES.map((r) => (
+          <button
+            key={r.id}
+            type="button"
+            onClick={() => setId(r.id)}
+            aria-pressed={r.id === id}
+            data-testid={`wiki-voyager-${r.id}`}
+            className={`rounded border px-2 py-0.5 text-[11px] transition-colors ${r.id === id ? 'border-data bg-data/10 text-data' : 'border-line text-ink-dim hover:border-data-dim'}`}
+          >
+            {language === 'en' ? r.name : r.nameZh}
+          </button>
+        ))}
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-[11px]" data-testid="wiki-voyager-table">
+          <thead>
+            <tr className="text-left text-[10px] tracking-wider text-ink-faint">
+              <th className="py-1 pr-2 font-normal">{t('飞越', 'Flyby')}</th>
+              <th className="py-1 pr-2 font-normal">{t('最接近时刻', 'Closest approach')}</th>
+              <th className="py-1 pr-2 font-normal">{t('偏转角 模型 / 实际', 'Turn model / actual')}</th>
+              <th className="py-1 pr-2 font-normal">{t('最近距离 模型 / 实际', 'Distance model / actual')}</th>
+              <th className="py-1 font-normal">{t('模型需补点火', 'Model extra burn')}</th>
+            </tr>
+          </thead>
+          <tbody className="readout">
+            {solution.flybys.map((f, i) => {
+              const actual = route.encounters[i]!;
+              return (
+                <tr key={f.jd} className="border-t border-line/50 text-ink-dim">
+                  <td className="py-1 pr-2 text-ink">{name(f.body)}</td>
+                  <td className="py-1 pr-2">{new Date(unixMsFromJulianDate(f.jd)).toISOString().slice(0, 10)}</td>
+                  <td className="py-1 pr-2">
+                    {formatNumber(f.flyby.turnAngle * RAD2DEG, 1)}° / {actual.turnDeg === null ? '—' : `${formatNumber(actual.turnDeg, 1)}°`}
+                  </td>
+                  <td className="py-1 pr-2">
+                    {formatNumber(f.flyby.periapsisRadius / 1000, 0)} / {formatNumber(actual.closestKm, 0)} km
+                  </td>
+                  <td className="py-1 text-data">{formatNumber(f.flyby.deltaV, 0)} m/s</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <TrajectoryDiagram sequence={solution.sequence} dates={solution.dates} legs={solution.legs} table="table1" />
+      <p className="text-[10px] leading-relaxed text-ink-faint">
+        {t(
+          `模型：真实发射日与各次最接近时刻，日心段零圈兰伯特，飞越按拼接圆锥。实际：JPL Horizons 中旅行者号的轨迹。最后一站（${name(route.encounters[route.encounters.length - 1]!.body)}）是终点，不计算飞越。`,
+          `Model: real launch date and closest-approach times, zero-revolution Lambert legs, patched-conic flybys. Actual: Voyager’s trajectory in JPL Horizons. The last stop (${name(route.encounters[route.encounters.length - 1]!.body)}) is the end point, so no flyby is computed there.`,
+        )}
+      </p>
+    </div>
+  );
+}
+
+const WIDGETS: Record<WikiWidget, () => React.JSX.Element | null> = {
   'rocket-equation': RocketEquationCalculator,
   'vehicle-deltav': VehicleDeltaVTable,
   'orbit-calculator': OrbitCalculator,
+  'voyager-tour': VoyagerTour,
 };
 
 function Block({ block, language }: { block: WikiBlock; language: Language }) {

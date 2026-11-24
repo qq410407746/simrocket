@@ -4,6 +4,9 @@
 import { describe, expect, it } from 'vitest';
 import { CELESTIAL_BODIES, MARS_BODY, MOON_BODY, cosmicVelocities, derivedSurface } from './celestialBodies';
 import { type Bilingual, type WikiBlock, WIKI_ARTICLES, WIKI_FIGURES, findWikiArticle, isWikiArticleId } from './wiki';
+import { VOYAGER_ROUTES } from './voyagerReference';
+import { evaluateRoute } from '@/game/interplanetary/mga';
+import { VOYAGER } from '@/game/interplanetary/testing/horizons';
 
 const HAN = /\p{Script=Han}/u;
 
@@ -24,8 +27,21 @@ const textsOf = (block: WikiBlock): Bilingual[] => {
 };
 
 describe('知识库条目', () => {
-  it('包含要求的七个主题，id 唯一，相关条目都存在', () => {
-    expect(WIKI_ARTICLES.map((a) => a.id)).toEqual(['physics-basics', 'rocket-equation', 'orbital-elements', 'cosmic-velocities', 'earth', 'moon', 'mars']);
+  it('包含要求的主题（含"轨道之星"四条），id 唯一，相关条目都存在', () => {
+    expect(WIKI_ARTICLES.map((a) => a.id)).toEqual([
+      'physics-basics',
+      'rocket-equation',
+      'orbital-elements',
+      'cosmic-velocities',
+      'earth',
+      'moon',
+      'mars',
+      'gravity-assist',
+      'voyager-grand-tour',
+      'multi-revolution-lambert',
+      'deep-space-maneuvers',
+    ]);
+    expect(WIKI_ARTICLES.filter((a) => a.category === 'showcase')).toHaveLength(4);
     for (const article of WIKI_ARTICLES) {
       expect(isWikiArticleId(article.id)).toBe(true);
       expect(article.sections.length).toBeGreaterThan(0);
@@ -114,5 +130,24 @@ describe('知识库里现算的数', () => {
     expect(f.marsTransfer.fromLeo).toBeLessThan(3700);
     // 单级入轨的例子：Isp 340 s、9.4 km/s → 质量比约 16.8
     expect(f.exampleRatio).toBeCloseTo(16.8, 1);
+  });
+});
+
+describe('轨道之星：旅行者号参考数据', () => {
+  it('与 JPL Horizons 基准文件一致，本模型重算的偏转角相差 < 1°', () => {
+    for (const route of VOYAGER_ROUTES) {
+      const fixture = VOYAGER[route.id].encounters as Record<string, { closestApproachJd: number; closestApproachKm: number }>;
+      for (const e of route.encounters) {
+        expect(e.jd).toBeCloseTo(fixture[e.body]!.closestApproachJd, 5);
+        expect(e.closestKm).toBe(fixture[e.body]!.closestApproachKm);
+      }
+      const sequence = ['earth', ...route.encounters.map((e) => e.body)] as const;
+      const s = evaluateRoute(sequence, [route.launchJd, ...route.encounters.map((e) => e.jd)], { parkingAltitude: 200_000, arrival: 'flyby', captureAltitude: 0, table: 'table1' })!;
+      s.flybys.forEach((f, i) => {
+        const turn = route.encounters[i]!.turnDeg!;
+        expect(Math.abs((f.flyby.turnAngle * 180) / Math.PI - turn)).toBeLessThan(1);
+      });
+      expect(route.encounters[route.encounters.length - 1]!.turnDeg).toBeNull();
+    }
   });
 });

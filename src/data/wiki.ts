@@ -8,16 +8,18 @@
  */
 import { ATMOSPHERE_COMPOSITION, CELESTIAL_BODIES, EARTH_BODY, GRAVITATIONAL_CONSTANT, MARS_BODY, MARS_ORBIT, MOON_BODY, MOON_ORBIT, PARKING_ORBIT_ALTITUDE, type CelestialBody, circularOrbitAt, cosmicVelocities, derivedSurface, earthMarsTransfer, earthMoonTransfer } from '@/data/celestialBodies';
 import { LAUNCH_SITES } from '@/data/launchSites';
-import { DEG2RAD, EARTH, KARMAN_LINE_ALTITUDE, SEA_LEVEL, STANDARD_GRAVITY } from '@/game/physics/constants';
+import { ASTRO, DEG2RAD, EARTH, KARMAN_LINE_ALTITUDE, SEA_LEVEL, STANDARD_GRAVITY } from '@/game/physics/constants';
 import { SYNCHRONOUS_RADIUS, combinedPlaneChange, hohmannTransfer } from '@/game/physics/orbital/advanced';
 import { circularSpeed } from '@/game/physics/orbital/elements';
 import { reachableInclination } from '@/game/physics/orbital/launch';
+import { MIN_FLYBY_RADIUS } from '@/game/interplanetary/flyby';
+import { type PlanetId, SUN_MU, findPlanet } from '@/game/interplanetary/planets';
 import { formatNumber } from '@/utils/format';
 
 /** 一段双语文字：[中文, English]。 */
 export type Bilingual = readonly [zh: string, en: string];
 
-export type WikiWidget = 'rocket-equation' | 'vehicle-deltav' | 'orbit-calculator';
+export type WikiWidget = 'rocket-equation' | 'vehicle-deltav' | 'orbit-calculator' | 'voyager-tour';
 
 export type WikiBlock =
   | { readonly kind: 'p'; readonly text: Bilingual }
@@ -34,9 +36,20 @@ export interface WikiSection {
   readonly blocks: readonly WikiBlock[];
 }
 
-export type WikiArticleId = 'physics-basics' | 'rocket-equation' | 'orbital-elements' | 'cosmic-velocities' | 'earth' | 'moon' | 'mars';
+export type WikiArticleId =
+  | 'physics-basics'
+  | 'rocket-equation'
+  | 'orbital-elements'
+  | 'cosmic-velocities'
+  | 'earth'
+  | 'moon'
+  | 'mars'
+  | 'gravity-assist'
+  | 'voyager-grand-tour'
+  | 'multi-revolution-lambert'
+  | 'deep-space-maneuvers';
 
-export type WikiCategory = 'theory' | 'bodies';
+export type WikiCategory = 'theory' | 'bodies' | 'showcase';
 
 export interface WikiArticle {
   readonly id: WikiArticleId;
@@ -526,7 +539,184 @@ const MARS_ARTICLE: WikiArticle = {
   sources: ['Wikipedia: Mars (infobox: NASA Mars fact sheet; Seidelmann 2007; Konopliv 2011; Hirt 2012)', `Wikipedia: Standard gravitational parameter (MGM2011; μ☉ = 1.32712440042×10²⁰ m³/s²)`],
 };
 
-export const WIKI_ARTICLES: readonly WikiArticle[] = [PHYSICS_BASICS, ROCKET_EQUATION, ORBITAL_ELEMENTS, COSMIC_VELOCITIES, EARTH_ARTICLE, MOON_ARTICLE, MARS_ARTICLE];
+
+// ---------------------------------------------------------------------------
+// 轨道之星：借力飞越、旅行者号大巡游、多圈兰伯特解与共振轨道、深空机动
+// ---------------------------------------------------------------------------
+
+/** 在最低飞越高度、给定 v∞ 时，一次飞越能转过的最大角度 [rad] 与日心速度的最大改变量 [m/s]。 */
+const flybyLimit = (body: PlanetId, vInf: number) => {
+  const rp = MIN_FLYBY_RADIUS[body];
+  const turn = 2 * Math.asin(1 / (1 + (rp * vInf * vInf) / findPlanet(body).mu));
+  return { rp, turn, gain: 2 * vInf * Math.sin(turn / 2) };
+};
+const FLYBY_EXAMPLES = [
+  ['venus', 5000],
+  ['earth', 9000],
+  ['jupiter', 8000],
+] as const;
+
+/** 共振轨道：周期为 n 年的日心椭圆的半长轴 [au]。 */
+const resonantSemiMajorAxis = (years: number) => Math.cbrt(years * years);
+const twoYearOrbit = resonantSemiMajorAxis(2);
+/** 2 年周期、近日点在地球轨道（1 au）的椭圆：远日点 [au] 与在地球轨道处相对地球的速度 [m/s]。 */
+const twoYearAphelion = 2 * twoYearOrbit - 1;
+const twoYearVInf = (() => {
+  const r = ASTRO.AU;
+  const a = twoYearOrbit * ASTRO.AU;
+  return Math.sqrt(SUN_MU * (2 / r - 1 / a)) - Math.sqrt(SUN_MU / r);
+})();
+
+const GRAVITY_ASSIST: WikiArticle = {
+  id: 'gravity-assist',
+  category: 'showcase',
+  title: ['借力飞越', 'Gravity assists'],
+  summary: ['不花推进剂改变速度：飞船掠过行星时借走它的一点公转速度。', 'Changing speed without propellant: a spacecraft passing a planet borrows a little of its orbital motion.'],
+  sections: [
+    {
+      heading: ['原理', 'How it works'],
+      blocks: [
+        { kind: 'p', text: ['站在行星上看，飞船沿双曲线飞过：进来和离开时相对行星的剩余速度 v∞ 大小相同，只是方向转了一个角度 δ。行星自己在绕太阳运动，把这两个速度分别加上行星的公转速度，飞船相对太阳的速度大小就变了——可以变快，也可以变慢。', 'Seen from the planet, the spacecraft follows a hyperbola: its excess speed v∞ relative to the planet is the same coming in and going out; only its direction turns by an angle δ. The planet itself is moving around the Sun, so adding the planet’s orbital velocity to both, the spacecraft’s speed relative to the Sun changes — it can go up or down.'] },
+        { kind: 'formula', expr: 'δ = 2 · asin( 1 / (1 + rₚ · v∞² / μ) )        |Δv☉| = 2 · v∞ · sin(δ / 2)', where: ['rₚ 近星点距离（离行星中心），μ 行星的引力参数。飞得越近、v∞ 越小，转得越多；日心速度的改变量最多是 2·v∞·sin(δ/2)', 'rₚ periapsis distance from the planet’s centre, μ the planet’s gravitational parameter. Closer passes and lower v∞ turn more; the heliocentric velocity changes by at most 2·v∞·sin(δ/2)'] },
+        { kind: 'p', text: ['能量并不是凭空来的：飞船得到的动能来自行星的公转，但行星质量太大，它的轨道变化小到测不出来。从行星前方掠过会减速（去水星、金星常用），从后方掠过会加速（去木星以外常用）。', 'The energy is not free: it comes from the planet’s orbital motion, but the planet is so massive that its change in orbit is immeasurably small. Passing in front of the planet slows the spacecraft (useful for Mercury and Venus); passing behind it speeds the spacecraft up (useful beyond Jupiter).'] },
+      ],
+    },
+    {
+      heading: ['一次飞越能借多少', 'How much one flyby can give'],
+      blocks: [
+        {
+          kind: 'table',
+          head: [['行星', 'Planet'], ['剩余速度 v∞', 'v∞'], ['最低飞越距离', 'Minimum flyby distance'], ['最大偏转', 'Maximum turn'], ['最大日心速度改变', 'Maximum heliocentric change']],
+          rows: FLYBY_EXAMPLES.map(([body, vInf]) => {
+            const f = flybyLimit(body, vInf);
+            const planet = findPlanet(body);
+            return [[planet.nameZh, planet.name] as Bilingual, `${kms(vInf, 1)} km/s`, `${n(f.rp / planet.equatorialRadius, 2)} R`, `${n(f.turn / DEG2RAD, 0)}°`, `${kms(f.gain, 1)} km/s`];
+          }),
+        },
+        { kind: 'p', text: ['木星质量最大，一次飞越就能让飞船的日心速度改变好几 km/s——这相当于一枚大型上面级的全部能力。', 'Jupiter, the most massive planet, can change a spacecraft’s heliocentric speed by several km/s in a single pass — the whole capability of a large upper stage.'] },
+      ],
+    },
+    {
+      heading: ['真实任务的路线', 'Routes of real missions'],
+      blocks: [
+        {
+          kind: 'table',
+          head: [['任务', 'Mission'], ['路线', 'Route'], ['关键日期', 'Key dates']],
+          rows: [
+            [['旅行者 2 号', 'Voyager 2'], ['地球 → 木星 → 土星 → 天王星 → 海王星', 'Earth → Jupiter → Saturn → Uranus → Neptune'], '1977-08-20 → 1979-07 → 1981-08 → 1986-01 → 1989-08'],
+            [['伽利略号', 'Galileo'], ['地球 → 金星 → 地球 → 地球 → 木星（VEEGA）', 'Earth → Venus → Earth → Earth → Jupiter (VEEGA)'], '1989-10-18 → 1990-02-10 → 1990-12-08 → 1992-12-08 → 1995-12-07'],
+            [['卡西尼号', 'Cassini'], ['地球 → 金星 → 金星 → 地球 → 木星 → 土星', 'Earth → Venus → Venus → Earth → Jupiter → Saturn'], '1997-10-15 → 1998-04-26 → 1999-06-24 → 1999-08-18 → 2000-12-30 → 2004-07-01'],
+            [['信使号', 'MESSENGER'], ['地球 → 地球 → 金星 → 金星 → 水星 ×3 → 入轨', 'Earth → Earth → Venus → Venus → Mercury ×3 → orbit'], '2004-08-03 → 2005-08-02 → 2006-10-24 → 2007-06-05 → 2008-01-14 / 2008-10-06 / 2009-09-29 → 2011-03-18'],
+            [['朱诺号', 'Juno'], ['地球 → 深空机动 → 地球 → 木星', 'Earth → deep-space maneuvers → Earth → Jupiter'], '2011-08-05 → 2012-08/09 → 2013-10-09 → 2016-07-05'],
+          ],
+        },
+        { kind: 'p', text: ['伽利略号、卡西尼号、信使号、朱诺号都连续飞越同一颗行星，或在两次飞越之间点火——这就是下面两个条目要讲的多圈兰伯特解（共振轨道）和深空机动。', 'Galileo, Cassini, MESSENGER and Juno all flew past the same planet twice in a row, or fired their engines between flybys — the multi-revolution Lambert solutions (resonant orbits) and deep-space maneuvers explained in the next two articles.'] },
+        { kind: 'game', text: ['主菜单的"发射窗口"可以计算借力路线：每段是零圈兰伯特轨道，每次飞越按拼接圆锥计算，进出 v∞ 不等时在近星点补一次点火。用旅行者号的真实日期核对，偏转角相差 0.0–0.4°（见"旅行者号的大巡游"）。连续飞越同一颗行星和深空机动不在计算范围内。', 'The main menu’s “Launch windows” computes gravity-assist routes: each leg is a zero-revolution Lambert arc, each flyby uses patched conics, and any v∞ mismatch is made up by a periapsis burn. Checked against Voyager’s real dates, turn angles agree within 0.0–0.4° (see “Voyager’s Grand Tour”). Consecutive flybys of the same planet and deep-space maneuvers are not computed.'] },
+      ],
+    },
+  ],
+  related: ['voyager-grand-tour', 'multi-revolution-lambert', 'deep-space-maneuvers', 'orbital-elements'],
+  sources: ['Wikipedia: Gravity assist; Galileo project; Timeline of Cassini–Huygens; MESSENGER; Juno (spacecraft)', 'JPL Horizons (Voyager 1/2 encounter geometry)'],
+};
+
+const VOYAGER_GRAND_TOUR: WikiArticle = {
+  id: 'voyager-grand-tour',
+  category: 'showcase',
+  title: ['旅行者号的大巡游', 'Voyager’s Grand Tour'],
+  summary: ['1977 年发射的两艘飞船，靠一连串借力飞越走遍外太阳系。', 'Two spacecraft launched in 1977 that toured the outer Solar System on a chain of gravity assists.'],
+  sections: [
+    {
+      heading: ['一次难得的排列', 'A rare alignment'],
+      blocks: [
+        { kind: 'p', text: ['20 世纪 70 年代末，木星、土星、天王星、海王星恰好排在太阳同一侧，一艘飞船可以借前一颗行星的引力飞向下一颗。旅行者 2 号于 1977-08-20 发射，依次飞越木星、土星、天王星、海王星，是至今唯一到访过天王星和海王星的飞船；旅行者 1 号于 1977-09-05 发射，飞越木星、土星后离开黄道面。', 'In the late 1970s Jupiter, Saturn, Uranus and Neptune happened to line up on the same side of the Sun, so a spacecraft could use each planet to fly on to the next. Voyager 2, launched on 1977-08-20, flew past Jupiter, Saturn, Uranus and Neptune and is still the only spacecraft to have visited Uranus and Neptune; Voyager 1, launched on 1977-09-05, flew past Jupiter and Saturn and then left the ecliptic plane.'] },
+      ],
+    },
+    {
+      heading: ['本游戏的模型 vs 真实轨迹', 'This game’s model vs the real trajectory'],
+      blocks: [
+        { kind: 'p', text: ['下面用真实的发射日和最接近时刻，在本游戏的计算器里重算这条路线：每段解兰伯特问题，每次飞越按拼接圆锥求偏转角和近星点距离，再与 JPL Horizons 中旅行者号的真实轨迹对比。', 'Below, the route is recomputed with this game’s calculator from the real launch dates and closest-approach times: each leg solves Lambert’s problem and each flyby’s turn angle and periapsis distance come from patched conics, compared with Voyager’s real trajectory in JPL Horizons.'] },
+        { kind: 'widget', widget: 'voyager-tour' },
+        { kind: 'p', text: ['几乎不需要补点火（几十 m/s 以内），说明真实的大巡游基本就是一连串不点火的飞越；真实飞船途中只做过小的轨道修正。', 'Hardly any extra burn is needed (tens of m/s at most): the real Grand Tour was essentially a chain of unpowered flybys, with only small trajectory corrections along the way.'] },
+      ],
+    },
+  ],
+  related: ['gravity-assist', 'multi-revolution-lambert', 'deep-space-maneuvers'],
+  sources: ['JPL Horizons (Voyager 1 = -31, Voyager 2 = -32; DE441)', 'Wikipedia: Gravity assist'],
+};
+
+const MULTI_REV_LAMBERT: WikiArticle = {
+  id: 'multi-revolution-lambert',
+  category: 'showcase',
+  title: ['多圈兰伯特解与共振轨道', 'Multi-revolution Lambert solutions and resonant orbits'],
+  summary: ['同样的起点、终点和飞行时间，飞船也可以先绕太阳转几圈再到——伽利略号的"地球—地球"两年就是这样飞的。', 'With the same start, end and flight time, a spacecraft can also loop around the Sun a few times first — that is how Galileo spent two years between its Earth flybys.'] ,
+  sections: [
+    {
+      heading: ['兰伯特问题有不止一个解', 'Lambert’s problem has more than one answer'],
+      blocks: [
+        { kind: 'p', text: ['兰伯特问题：已知两点位置和飞行时间 Δt，求连接它们的轨道。最直接的解是"零圈"——不绕中心天体整圈就到达。但如果 Δt 足够长，飞船还可以先绕 N 整圈再到达终点：对每个 N ≥ 1，只要 Δt 不短于这一圈数所需的最短时间，就有两条椭圆（一条周期较短、一条较长）满足要求。', 'Lambert’s problem: given two positions and a flight time Δt, find the orbit connecting them. The most direct answer is the “zero-revolution” arc that arrives without a full loop. But if Δt is long enough, the spacecraft can also complete N full revolutions first: for each N ≥ 1, provided Δt is at least the minimum for that many loops, two ellipses (one shorter-period, one longer) fit.'] },
+        { kind: 'formula', expr: 'N = 0 ⇒ 1     N ≥ 1 ⇒ 0 / 2     Σ ≤ 2·N_max + 1', where: ['解的个数：零圈 1 个；每个 N ≥ 1 有 0 或 2 个；总数不超过 2·N_max + 1。再乘以方向（顺行/逆行）。求多圈解需要专门的算法（例如 Izzo 2015），在每个 N 上分别找两个分支', 'Number of solutions: one with zero revolutions; zero or two for each N ≥ 1; at most 2·N_max + 1 in total. Multiply by direction (prograde/retrograde). Multi-revolution solutions need dedicated algorithms (e.g. Izzo 2015) that search both branches for each N'] },
+      ],
+    },
+    {
+      heading: ['共振轨道：回到同一颗行星', 'Resonant orbits: coming back to the same planet'],
+      blocks: [
+        { kind: 'p', text: ['要连续两次飞越同一颗行星，飞船必须在一段时间后回到行星所在的位置。最简单的办法是让飞船的日心轨道周期与行星成整数比，比如行星转 2 圈时飞船转 1 圈（2:1 共振）。这时起点和终点是同一颗行星，零圈兰伯特解根本不存在，只能用多圈解。', 'To fly past the same planet twice in a row, the spacecraft must return to where the planet is some time later. The simplest way is a heliocentric orbit whose period is a whole-number ratio of the planet’s — for example the planet goes round twice while the spacecraft goes round once (2:1 resonance). Start and end are then the same planet, so no zero-revolution Lambert arc exists; only multi-revolution solutions do.'] },
+        { kind: 'p', text: [`伽利略号 1990-12-08 第一次飞越地球后，进入周期 2 年的日心轨道，1992-12-08 正好回到地球第二次飞越，然后飞向木星。周期 2 年的轨道半长轴是 ${n(twoYearOrbit, 3)} au；若近日点在地球轨道上，远日点约 ${n(twoYearAphelion, 2)} au，在地球处相对地球要多出约 ${kms(twoYearVInf, 1)} km/s——第一次地球飞越加上金星飞越给的正是这部分速度。第二次飞越不再增加能量，只把方向转向木星。`, `After its first Earth flyby on 1990-12-08, Galileo entered a heliocentric orbit with a two-year period and returned to Earth exactly on 1992-12-08 for its second flyby, then headed for Jupiter. A two-year orbit has a semi-major axis of ${n(twoYearOrbit, 3)} au; with perihelion at Earth’s orbit its aphelion is about ${n(twoYearAphelion, 2)} au, and at Earth it moves about ${kms(twoYearVInf, 1)} km/s faster than Earth — the speed the Venus flyby and first Earth flyby provided. The second flyby added no energy; it only turned the path toward Jupiter.`] },
+        { kind: 'p', text: ['信使号三次飞越水星、卡西尼号两次飞越金星，用的也是与行星周期接近整数比的轨道，再配合深空机动微调。', 'MESSENGER’s three Mercury flybys and Cassini’s two Venus flybys likewise used orbits close to whole-number period ratios with the planet, trimmed by deep-space maneuvers.'] },
+        { kind: 'game', text: ['游戏的发射窗口计算器只求零圈兰伯特解，因此不允许连续两次飞越同一颗行星；像"地球—金星—地球—木星"这样的路线在游戏里算出来需要额外点火约 2.5 km/s，而真实的伽利略号靠地球—地球的两年共振段省掉了这部分。这是有意保留的简化：多圈解和共振轨道只在这里介绍。', 'The game’s launch-window calculator solves only zero-revolution Lambert arcs, so consecutive flybys of the same planet are not allowed; a route like Earth–Venus–Earth–Jupiter needs an extra burn of about 2.5 km/s in the game, which the real Galileo avoided with its two-year Earth–Earth resonant leg. This simplification is deliberate: multi-revolution solutions and resonant orbits are explained here only.'] },
+      ],
+    },
+  ],
+  related: ['gravity-assist', 'deep-space-maneuvers', 'orbital-elements'],
+  sources: ['Wikipedia: Lambert’s problem; Galileo project (Venus 1990-02-10, Earth 1990-12-08 and 1992-12-08, Jupiter 1995-12-07); MESSENGER; Timeline of Cassini–Huygens', 'D. Izzo, “Revisiting Lambert’s problem”, Celestial Mechanics and Dynamical Astronomy 121 (2015)'],
+};
+
+const DEEP_SPACE_MANEUVERS: WikiArticle = {
+  id: 'deep-space-maneuvers',
+  category: 'showcase',
+  title: ['深空机动', 'Deep-space maneuvers'],
+  summary: ['在两次飞越之间、远离任何行星的地方点一次火，改出更好的下一次飞越。', 'A burn far from any planet, between two flybys, to set up a better next encounter.'],
+  sections: [
+    {
+      heading: ['为什么要在半路点火', 'Why burn halfway'],
+      blocks: [
+        { kind: 'p', text: ['纯粹的借力路线里，每一段都是一条固定的兰伯特轨道，飞到下一颗行星时的 v∞ 和方向完全由日期决定，常常对不上下一次飞越的需要。在两段之间加一次深空机动（DSM），轨道就多了一个可以调节的"折点"：花一点推进剂，换来下一次飞越更大的 v∞ 或更合适的方向，总账上反而更省。', 'In a pure gravity-assist route each leg is a fixed Lambert arc, so the v∞ and direction at the next planet are dictated by the dates and often do not suit the next flyby. Adding a deep-space maneuver (DSM) between legs gives the path an adjustable “kink”: a little propellant buys a larger or better-aimed v∞ at the next flyby, and the total often comes out cheaper.'] },
+        { kind: 'p', text: ['最典型的是"ΔV-EGA"（深空机动 + 地球借力）：先发射到周期约 2 年的日心轨道，在远日点附近点火压低近日点，绕回地球时相对地球的 v∞ 大大增加，再借地球飞向外行星。这比直接用火箭把 C3 提高同样多要省。', 'The classic is “ΔV-EGA” (deep-space maneuver plus Earth gravity assist): launch into a heliocentric orbit of about two years, burn near aphelion to lower perihelion, so the spacecraft returns to Earth with a much larger v∞, then use Earth to head for the outer planets. This is cheaper than having the rocket raise C3 by the same amount directly.'] },
+      ],
+    },
+    {
+      heading: ['真实例子', 'Real examples'],
+      blocks: [
+        {
+          kind: 'table',
+          head: [['任务', 'Mission'], ['机动', 'Maneuver'], ['作用', 'Purpose']],
+          rows: [
+            [['朱诺号', 'Juno'], ['2012 年 8 月和 9 月两次，在火星轨道外的远日点附近', 'Two burns in August and September 2012, near aphelion beyond Mars’s orbit'], ['2013-10-09 以 559 km 高度飞越地球，再飞向木星；2016-07-05 入轨时点火减速 542 m/s', 'Set up the 559 km Earth flyby on 2013-10-09 toward Jupiter; orbit insertion on 2016-07-05 slowed it by 542 m/s']],
+            [['卡西尼号', 'Cassini'], ['1998-12-03 主发动机工作 90 分钟，减速约 450 m/s', '1998-12-03: 90-minute main-engine burn, slowing it by about 450 m/s'], ['两次金星飞越之间，把飞船送上 1999-06-24 第二次金星飞越的路线', 'Between the two Venus flybys, putting it on course for the second on 1999-06-24']],
+            [['伽利略号', 'Galileo'], ['1990 年 4 月和 5 月两次轨道修正，共约 35 m/s', 'Two course corrections in April and May 1990, about 35 m/s in total'], ['金星飞越之后，瞄准 1990-12-08 的地球飞越', 'After the Venus flyby, aiming for the 1990-12-08 Earth flyby']],
+          ],
+        },
+        { kind: 'game', text: ['游戏的发射窗口计算器不含深空机动：每段从一颗行星直接飞到下一颗，飞越中的不匹配只在近星点用一次点火补上。这是有意保留的简化；深空机动只在这里介绍。', 'The game’s launch-window calculator has no deep-space maneuvers: each leg flies straight from one planet to the next, and any mismatch is made up by a single burn at periapsis. This simplification is deliberate; deep-space maneuvers are explained here only.'] },
+      ],
+    },
+  ],
+  related: ['gravity-assist', 'multi-revolution-lambert', 'rocket-equation'],
+  sources: ['Wikipedia: Juno (spacecraft); Timeline of Cassini–Huygens; Galileo project'],
+};
+
+export const WIKI_ARTICLES: readonly WikiArticle[] = [
+  PHYSICS_BASICS,
+  ROCKET_EQUATION,
+  ORBITAL_ELEMENTS,
+  COSMIC_VELOCITIES,
+  EARTH_ARTICLE,
+  MOON_ARTICLE,
+  MARS_ARTICLE,
+  GRAVITY_ASSIST,
+  VOYAGER_GRAND_TOUR,
+  MULTI_REV_LAMBERT,
+  DEEP_SPACE_MANEUVERS,
+];
 
 export const DEFAULT_WIKI_ARTICLE: WikiArticleId = 'rocket-equation';
 
@@ -537,6 +727,7 @@ export const isWikiArticleId = (id: unknown): id is WikiArticleId => typeof id =
 export const WIKI_CATEGORY_LABEL: Record<WikiCategory, Bilingual> = {
   theory: ['原理', 'Principles'],
   bodies: ['天体', 'Celestial bodies'],
+  showcase: ['轨道之星', 'Orbit showcase'],
 };
 
 // 单独导出：测试用来核对文中引用的数
