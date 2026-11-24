@@ -63,3 +63,51 @@ test('发射窗口计算器：火星窗口、猪排图点选、木星时间上�
   expect(content.replaceAll('简体中文', '')).not.toMatch(/\p{Script=Han}/u);
   expect(problems).toEqual([]);
 });
+
+test('借力飞越：预设路线、自定义路线、飞越表与轨迹图', async ({ page }) => {
+  const problems: string[] = [];
+  page.on('pageerror', (error) => problems.push(error.message));
+  await page.goto('/');
+  await page.getByTestId('tab-windows').click();
+  await page.getByTestId('lw-start-year').fill('2026');
+  await page.getByTestId('lw-target-saturn').click();
+  await expect(page.getByTestId('lw-status')).not.toHaveText('计算中…', { timeout: 60_000 });
+  const direct = kms(await page.getByTestId('lw-best-dv-total').textContent());
+  await expect(page.getByTestId('lw-trajectory')).toBeVisible();
+
+  // 经木星去土星：后台线程搜索，列出若干个出发日期；飞越表里有木星
+  await page.getByTestId('lw-route-jupiter').click();
+  await expect(page.getByTestId('lw-route-sequence')).toHaveText('地球 → 木星 → 土星');
+  await expect(page.getByTestId('lw-solution-0')).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId('lw-flyby-table')).toContainText('木星');
+  await expect(page.getByTestId('lw-trajectory')).toBeVisible();
+  const totals: number[] = [];
+  for (let i = 0; i < (await page.locator('[data-testid^=lw-solution-]').count()); i++) {
+    await page.getByTestId(`lw-solution-${i}`).click();
+    totals.push(kms(await page.getByTestId('lw-route-dv-total').textContent()));
+    const parts = ['lw-route-dv-departure', 'lw-route-dv-flyby', 'lw-route-dv-capture'];
+    let sum = 0;
+    for (const id of parts) sum += kms(await page.getByTestId(id).textContent());
+    expect(sum).toBeCloseTo(totals[i]!, 1);
+  }
+  // 2026–2035 年里，至少有一个经木星的路线比直飞第一个窗口更省
+  expect(Math.min(...totals)).toBeLessThan(direct);
+
+  // 自定义：依次加金星、木星 → 地球 → 金星 → 木星 → 土星；撤销最后一个后变成经金星
+  await page.getByTestId('lw-route-direct').click();
+  await page.getByTestId('lw-add-venus').click();
+  await page.getByTestId('lw-add-jupiter').click();
+  await expect(page.getByTestId('lw-route-sequence')).toContainText('地球 → 金星 → 木星 → 土星');
+  await expect(page.getByTestId('lw-status')).not.toHaveText('计算中…', { timeout: 60_000 });
+  await page.getByTestId('lw-remove-flyby').click();
+  await expect(page.getByTestId('lw-route-sequence')).toHaveText(/^地球 → 金星 → 土星/);
+
+  // 英文
+  await page.getByTestId('lw-route-jupiter').click();
+  await expect(page.getByTestId('lw-solution-0')).toBeVisible({ timeout: 60_000 });
+  await page.getByTestId('language-en').click();
+  await expect(page.getByTestId('lw-route-sequence')).toHaveText('Earth → Jupiter → Saturn');
+  const content = (await page.locator('body').textContent()) ?? '';
+  expect(content.replaceAll('简体中文', '')).not.toMatch(/\p{Script=Han}/u);
+  expect(problems).toEqual([]);
+});

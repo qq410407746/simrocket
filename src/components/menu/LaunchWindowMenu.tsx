@@ -1,11 +1,13 @@
-import { useEffect, useRef, useState } from 'react';
-import { DESTINATIONS, findPlanet } from '@/game/interplanetary/planets';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { type MgaSolution, evaluateRoute } from '@/game/interplanetary/mga';
+import { DESTINATIONS, type PlanetId, PLANETS, findPlanet } from '@/game/interplanetary/planets';
 import { type ArrivalMode, CAPTURE_APOAPSIS_RADII, type Transfer, flightTimeRange } from '@/game/interplanetary/transfer';
 import { type PorkchopGrid, WINDOW_MARGIN } from '@/game/interplanetary/windows';
 import { RAD2DEG } from '@/game/physics/constants';
 import { unixMsFromJulianDate } from '@/game/physics/ephemeris/time';
 import { useI18n } from '@/i18n';
-import { FIRST_YEAR, LAST_YEAR, PARKING_ALTITUDE, SEARCH_SPANS, useLaunchWindowStore } from '@/stores/launchWindowStore';
+import { FIRST_YEAR, LAST_YEAR, PARKING_ALTITUDE, SEARCH_SPANS, presetFlybys, routeOf, useLaunchWindowStore } from '@/stores/launchWindowStore';
+import { TrajectoryDiagram } from './TrajectoryDiagram';
 import { formatNumber } from '@/utils/format';
 
 /** 儒略日 → "2026-10-31"（UTC）。 */
@@ -32,6 +34,177 @@ function Heading({ children }: { children: string }) {
   return <h2 className="mb-1.5 text-[11px] font-semibold tracking-[0.18em] text-ink-faint">{children}</h2>;
 }
 
+const MAX_FLYBYS = 3;
+
+const usePlanetName = () => {
+  const { language } = useI18n();
+  return (id: PlanetId) => (language === 'en' ? findPlanet(id).name : findPlanet(id).nameZh);
+};
+
+/** 路线：直飞、预设的借力路线，或自己依次添加飞越的行星。 */
+function RouteSelector() {
+  const { t } = useI18n();
+  const name = usePlanetName();
+  const target = useLaunchWindowStore((s) => s.target);
+  const flybys = useLaunchWindowStore((s) => s.flybys);
+  const setFlybys = useLaunchWindowStore((s) => s.setFlybys);
+  const presets = presetFlybys(target);
+  const same = (a: readonly PlanetId[], b: readonly PlanetId[]) => a.length === b.length && a.every((p, i) => p === b[i]);
+  const isPreset = flybys.length === 0 || presets.some((p) => same(p, flybys));
+  const last = flybys.length > 0 ? flybys[flybys.length - 1]! : 'earth';
+  return (
+    <div data-testid="lw-route">
+      <Heading>{t('路线', 'Route')}</Heading>
+      <div className="flex flex-wrap gap-1">
+        <button type="button" onClick={() => setFlybys([])} aria-pressed={flybys.length === 0} data-testid="lw-route-direct" className={button(flybys.length === 0)}>
+          {t('直飞', 'Direct')}
+        </button>
+        {presets.map((p) => (
+          <button key={p.join('-')} type="button" onClick={() => setFlybys(p)} aria-pressed={same(p, flybys)} data-testid={`lw-route-${p.join('-')}`} className={button(same(p, flybys))}>
+            {t('经', 'via')} {p.map(name).join(t('、', ', '))}
+          </button>
+        ))}
+      </div>
+      <div className="mt-1.5 flex flex-wrap items-center gap-1 text-[10.5px] text-ink-faint">
+        <span>{t('自定义：依次添加飞越', 'Custom: add flybys in order')}</span>
+        {PLANETS.filter((p) => p.id !== last && flybys.length < MAX_FLYBYS).map((p) => (
+          <button key={p.id} type="button" onClick={() => setFlybys([...flybys, p.id])} data-testid={`lw-add-${p.id}`} className="rounded border border-line px-1.5 py-0.5 text-ink-dim hover:border-data-dim hover:text-ink">
+            +{name(p.id)}
+          </button>
+        ))}
+        {flybys.length > 0 && (
+          <button type="button" onClick={() => setFlybys(flybys.slice(0, -1))} data-testid="lw-remove-flyby" className="rounded border border-line px-1.5 py-0.5 text-ink-dim hover:border-warn hover:text-warn">
+            {t('撤销', 'Undo')}
+          </button>
+        )}
+      </div>
+      <p className="readout mt-1 text-[11px] text-ink" data-testid="lw-route-sequence">
+        {routeOf({ target, flybys }).map(name).join(' → ')}
+        {!isPreset && <span className="ml-1 text-[10px] text-ink-faint">{t('（自定义）', '(custom)')}</span>}
+      </p>
+    </div>
+  );
+}
+
+const listButton = (selected: boolean) =>
+  `readout grid w-full grid-cols-[1fr_auto] items-baseline gap-x-2 rounded-md border px-2.5 py-1 text-left text-[11.5px] transition-colors ${
+    selected ? 'border-data bg-data/10' : 'border-line bg-panel/40 hover:border-data-dim'
+  }`;
+
+/** 借力路线的解：按出发日期排列。 */
+function RouteList() {
+  const { t } = useI18n();
+  const duration = useDuration();
+  const result = useLaunchWindowStore((s) => s.routeResult);
+  const selected = useLaunchWindowStore((s) => s.selectedSolution);
+  const select = useLaunchWindowStore((s) => s.selectSolution);
+  if (!result) return null;
+  if (result.solutions.length === 0) return <p className="text-[11px] text-ink-dim">{t('这段时间里没有找到可行的路线，试试延长搜索年数或换一条路线。', 'No route found in this period; try more years or another route.')}</p>;
+  return (
+    <ol className="flex flex-col gap-1">
+      {result.solutions.map((sol, i) => (
+        <li key={sol.dates[0]}>
+          <button type="button" onClick={() => select(i)} aria-pressed={i === selected} data-testid={`lw-solution-${i}`} className={listButton(i === selected)}>
+            <span className="text-ink">
+              {formatDate(sol.dates[0]!)} → {formatDate(sol.dates[sol.dates.length - 1]!)}
+            </span>
+            <span className="text-data">{kms(sol.totalDeltaV)} km/s</span>
+            <span className="text-[10px] text-ink-faint">{duration(sol.dates[sol.dates.length - 1]! - sol.dates[0]!)}</span>
+            <span className={`text-[10px] ${sol.feasible ? 'text-ink-faint' : 'text-warn'}`}>{sol.feasible ? '' : t('飞越过低', 'flyby too low')}</span>
+          </button>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+/** 右侧：借力路线的一个解。 */
+function RouteDetail() {
+  const { t } = useI18n();
+  const duration = useDuration();
+  const name = usePlanetName();
+  const result = useLaunchWindowStore((s) => s.routeResult);
+  const index = useLaunchWindowStore((s) => s.selectedSolution);
+  const arrival = useLaunchWindowStore((s) => s.arrival);
+  const sol: MgaSolution | undefined = result?.solutions[index];
+  if (!result || !sol) return null;
+  const end = sol.dates[sol.dates.length - 1]!;
+  return (
+    <>
+      <section>
+        <h3 className="mb-1 text-[12px] font-semibold tracking-wider text-ink">{t('整条路线', 'Whole route')}</h3>
+        <dl className="grid grid-cols-1 gap-x-5 sm:grid-cols-2">
+          <div>
+            <Row label={t('发射日期', 'Launch date')} value={formatDate(sol.dates[0]!)} testId="lw-route-departure" />
+            <Row label={t('到达日期', 'Arrival date')} value={formatDate(end)} testId="lw-route-arrival" />
+            <Row label={t('总飞行时间', 'Total flight time')} value={duration(end - sol.dates[0]!)} />
+            <Row label="C3" value={`${formatNumber(sol.c3 / 1e6, 1)} km²/s²`} testId="lw-route-c3" />
+            <Row label={t('出发渐近线赤纬', 'Departure declination (DLA)')} value={`${formatNumber(sol.declination * RAD2DEG, 1)}°`} />
+          </div>
+          <div>
+            <Row label={t('离开停泊轨道 Δv', 'Δv from parking orbit')} value={`${kms(sol.departureDeltaV)} km/s`} testId="lw-route-dv-departure" />
+            <Row label={t('飞越点火合计', 'Flyby burns, total')} value={`${kms(sol.flybyDeltaV)} km/s`} testId="lw-route-dv-flyby" />
+            <Row label={t('到达剩余速度 v∞', 'Arrival v∞')} value={`${kms(sol.arrivalVInf)} km/s`} />
+            <Row label={arrival === 'flyby' ? t('入轨 Δv（飞掠不需要）', 'Capture Δv (none for flyby)') : t('入轨 Δv', 'Capture Δv')} value={`${kms(sol.captureDeltaV)} km/s`} testId="lw-route-dv-capture" />
+            <div className="flex items-baseline justify-between gap-2 py-1">
+              <dt className="text-[12px] font-semibold text-ink">{t('总 Δv', 'Total Δv')}</dt>
+              <dd className="readout text-[16px] font-semibold text-data" data-testid="lw-route-dv-total">
+                {kms(sol.totalDeltaV)} km/s
+              </dd>
+            </div>
+          </div>
+        </dl>
+      </section>
+      <section>
+        <h3 className="mb-1 text-[12px] font-semibold tracking-wider text-ink">{t('借力飞越', 'Gravity assists')}</h3>
+        <div className="overflow-x-auto">
+          <table className="w-full text-[11px]" data-testid="lw-flyby-table">
+            <thead>
+              <tr className="text-left text-[10px] tracking-wider text-ink-faint">
+                <th className="py-1 pr-2 font-normal">{t('行星', 'Planet')}</th>
+                <th className="py-1 pr-2 font-normal">{t('日期', 'Date')}</th>
+                <th className="py-1 pr-2 font-normal">{t('v∞ 进 / 出', 'v∞ in / out')}</th>
+                <th className="py-1 pr-2 font-normal">{t('偏转角', 'Turn')}</th>
+                <th className="py-1 pr-2 font-normal">{t('近星点高度', 'Periapsis altitude')}</th>
+                <th className="py-1 font-normal">{t('点火', 'Burn')}</th>
+              </tr>
+            </thead>
+            <tbody className="readout">
+              {sol.flybys.map((f) => (
+                <tr key={f.jd} className="border-t border-line/50 text-ink-dim">
+                  <td className="py-1 pr-2 text-ink">{name(f.body)}</td>
+                  <td className="py-1 pr-2">{formatDate(f.jd)}</td>
+                  <td className="py-1 pr-2">
+                    {kms(f.flyby.vInfIn)} / {kms(f.flyby.vInfOut)}
+                  </td>
+                  <td className="py-1 pr-2">{formatNumber(f.flyby.turnAngle * RAD2DEG, 1)}°</td>
+                  <td className={`py-1 pr-2 ${f.flyby.feasible ? '' : 'text-warn'}`}>
+                    {`${formatNumber(f.flyby.altitude / 1000, 0)} km · ${formatNumber(f.flyby.periapsisRadius / findPlanet(f.body).equatorialRadius, 1)} R`}
+                    {f.flyby.feasible ? '' : t('（最低）', ' (min)')}
+                  </td>
+                  <td className="py-1 text-data">{kms(f.flyby.deltaV)} km/s</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {!sol.feasible && (
+          <p className="mt-1 rounded border border-warn/50 bg-warn/5 px-2 py-1 text-[10.5px] text-warn" data-testid="lw-flyby-warning">
+            {t('有飞越需要的偏转超过了最低飞越高度能给的：按最低高度飞，剩下的偏转用额外点火补上（已计入点火）。', 'A flyby needs more turning than the minimum altitude allows: it is flown at the minimum altitude and the remaining turn is made up with an extra burn (included above).')}
+          </p>
+        )}
+      </section>
+      <TrajectoryDiagram sequence={sol.sequence} dates={sol.dates} legs={sol.legs} table={result.options.table} />
+      <p className="text-[10px] leading-relaxed text-ink-faint">
+        {t(
+          '飞越按拼接圆锥计算：相对行星的 v∞ 大小不变、方向偏转；进出 v∞ 不等时在近星点补一次点火。各段是零圈兰伯特轨道，不支持连续飞越同一颗行星（共振轨道）和深空机动，所以伽利略号、卡西尼号那样的路线只能近似。路线由撒点加单纯形法优化，不保证全局最优。',
+          'Flybys use patched conics: v∞ relative to the planet keeps its magnitude and turns; any mismatch between v∞ in and out is made up by a burn at periapsis. Each leg is a zero-revolution Lambert arc; consecutive flybys of the same planet (resonant orbits) and deep-space maneuvers are not supported, so routes like Galileo’s or Cassini’s are only approximated. Routes are optimized by random sampling plus the simplex method; the global optimum is not guaranteed.',
+        )}
+      </p>
+    </>
+  );
+}
+
 /** 左侧：目的地、搜索条件与窗口列表。 */
 export function LaunchWindowSetup() {
   const { language, t } = useI18n();
@@ -39,18 +212,21 @@ export function LaunchWindowSetup() {
   const s = useLaunchWindowStore();
   const compute = useLaunchWindowStore((state) => state.compute);
   useEffect(() => compute(), [compute]);
+  const routed = s.flybys.length > 0;
   const defaultRange = flightTimeRange(s.target);
-  const maxFlight = s.maxFlightDays ?? defaultRange.max;
-  const flightInYears = defaultRange.max > 730;
+  const maxFlight = s.maxFlightDays ?? (routed ? null : defaultRange.max);
+  const flightInYears = routed || defaultRange.max > 730;
   const [draft, setDraft] = useState<string | null>(null);
-  const shownMax = draft ?? formatNumber(flightInYears ? maxFlight / 365.25 : maxFlight, flightInYears ? 1 : 0).replaceAll(',', '');
+  const shownMax = draft ?? (maxFlight === null ? '' : formatNumber(flightInYears ? maxFlight / 365.25 : maxFlight, flightInYears ? 1 : 0).replaceAll(',', ''));
+  const count = routed ? s.routeResult?.solutions.length : s.result?.windows.length;
+  const working = s.busy || (routed ? !s.routeResult && !s.routeError : !s.result);
 
   return (
     <section className="flex flex-col gap-2.5" data-testid="launch-window-setup">
       <p className="text-[11px] leading-relaxed text-ink-dim">
         {t(
-          `从 ${PARKING_ALTITUDE / 1000} km 地球停泊轨道出发，直接飞往目标行星（不借力飞越）。按真实行星位置搜索最省 Δv 的发射日期。`,
-          `Departing from a ${PARKING_ALTITUDE / 1000} km Earth parking orbit and flying directly to the target (no gravity assists). Searches real planetary positions for the lowest-Δv launch dates.`,
+          `从 ${PARKING_ALTITUDE / 1000} km 地球停泊轨道出发，直飞或借力飞越其他行星去目标。按真实行星位置搜索最省 Δv 的发射日期。`,
+          `Departing from a ${PARKING_ALTITUDE / 1000} km Earth parking orbit, flying directly or via gravity assists. Searches real planetary positions for the lowest-Δv launch dates.`,
         )}
       </p>
       <div>
@@ -66,6 +242,7 @@ export function LaunchWindowSetup() {
           })}
         </div>
       </div>
+      <RouteSelector />
       <div className="grid grid-cols-2 gap-2">
         <label className="flex flex-col gap-0.5 text-[10px] text-ink-faint">
           {t('从哪一年开始搜索', 'Search from year')}
@@ -106,7 +283,7 @@ export function LaunchWindowSetup() {
       </div>
       <label className="flex items-center justify-between gap-2 text-[10.5px] text-ink-faint">
         <span>
-          {t('最长飞行时间', 'Longest flight time')} ({flightInYears ? t('年', 'years') : t('天', 'days')})
+          {routed ? t('最长总飞行时间', 'Longest total flight time') : t('最长飞行时间', 'Longest flight time')} ({flightInYears ? t('年', 'years') : t('天', 'days')})
         </span>
         <span className="flex items-center gap-1">
           <input
@@ -114,11 +291,13 @@ export function LaunchWindowSetup() {
             min={0}
             step="any"
             value={shownMax}
+            placeholder={t('不限', 'none')}
             onChange={(e) => setDraft(e.target.value)}
             onBlur={() => {
               if (draft !== null) {
                 const value = Number(draft) * (flightInYears ? 365.25 : 1);
-                if (Number.isFinite(value) && value > defaultRange.min) s.setMaxFlightDays(value);
+                if (draft.trim() === '') s.setMaxFlightDays(null);
+                else if (Number.isFinite(value) && value > (routed ? 30 : defaultRange.min)) s.setMaxFlightDays(value);
                 setDraft(null);
               }
             }}
@@ -130,7 +309,7 @@ export function LaunchWindowSetup() {
           />
           {s.maxFlightDays !== null && (
             <button type="button" onClick={() => { setDraft(null); s.setMaxFlightDays(null); }} className="text-[10px] text-data-dim hover:text-data" data-testid="lw-max-flight-reset">
-              {t('默认', 'Default')}
+              {routed ? t('不限', 'No limit') : t('默认', 'Default')}
             </button>
           )}
         </span>
@@ -140,12 +319,14 @@ export function LaunchWindowSetup() {
         <div className="mb-1.5 flex items-baseline justify-between">
           <h2 className="text-[11px] font-semibold tracking-[0.18em] text-ink-faint">{t('发射窗口', 'Launch windows')}</h2>
           <span className="readout text-[10px] text-ink-faint" data-testid="lw-status">
-            {s.busy || !s.result ? t('计算中…', 'Computing…') : t(`${s.result.windows.length} 个`, `${s.result.windows.length} found`)}
+            {working ? t('计算中…', 'Computing…') : t(`${count ?? 0} 个`, `${count ?? 0} found`)}
           </span>
         </div>
-        {s.result && !s.busy && s.result.windows.length === 0 && <p className="text-[11px] text-ink-dim">{t('这段时间里没有找到窗口，试试延长搜索年数。', 'No window in this period; try searching more years.')}</p>}
+        {routed && s.routeError && <p className="text-[11px] text-warn">{s.routeError}</p>}
+        {routed && !working && <RouteList />}
+        {!routed && s.result && !s.busy && s.result.windows.length === 0 && <p className="text-[11px] text-ink-dim">{t('这段时间里没有找到窗口，试试延长搜索年数。', 'No window in this period; try searching more years.')}</p>}
         <ol className="flex flex-col gap-1">
-          {s.result?.windows.map((w, i) => {
+          {!routed && s.result?.windows.map((w, i) => {
             const selected = i === s.selectedWindow;
             return (
               <li key={w.best.departureJd}>
@@ -367,14 +548,26 @@ function Porkchop({ grid, best, picked }: { grid: PorkchopGrid; best: Transfer; 
 export function LaunchWindowDetail() {
   const { language, t } = useI18n();
   const s = useLaunchWindowStore();
-  const planet = findPlanet(s.target);
-  const window = s.result?.windows[s.selectedWindow];
+  const routed = s.flybys.length > 0;
+  const window = routed ? undefined : s.result?.windows[s.selectedWindow];
+  const solution = routed ? s.routeResult?.solutions[s.selectedSolution] : undefined;
+  const shown = s.picked ?? window?.best;
+  const direct = useMemo(
+    () => (shown && s.result ? evaluateRoute(['earth', s.target], [shown.departureJd, shown.arrivalJd], { ...s.result.options }) : null),
+    [shown, s.result, s.target],
+  );
   return (
     <article className="panel-frame scroll-thin pointer-events-auto flex w-full max-w-[640px] flex-col gap-2.5 overflow-y-auto rounded-xl px-5 py-3.5 backdrop-blur-md" data-testid="launch-window-detail">
       <header>
-        <p className="text-[10px] tracking-[0.2em] text-data-dim">{t('发射窗口计算器', 'Launch window calculator')} · {t('地球', 'Earth')} → {language === 'en' ? planet.name : planet.nameZh}</p>
+        <p className="text-[10px] tracking-[0.2em] text-data-dim">
+          {t('发射窗口计算器', 'Launch window calculator')} · {routeOf(s).map((id) => (language === 'en' ? findPlanet(id).name : findPlanet(id).nameZh)).join(' → ')}
+        </p>
         <h2 className="mt-1 text-[20px] leading-tight font-bold tracking-wider text-ink" data-testid="lw-title">
-          {window ? t(`${formatDate(window.best.departureJd)} 发射窗口`, `Launch window of ${formatDate(window.best.departureJd)}`) : t('发射窗口', 'Launch window')}
+          {window
+            ? t(`${formatDate(window.best.departureJd)} 发射窗口`, `Launch window of ${formatDate(window.best.departureJd)}`)
+            : solution
+              ? t(`${formatDate(solution.dates[0]!)} 出发的借力路线`, `Gravity-assist route departing ${formatDate(solution.dates[0]!)}`)
+              : t('发射窗口', 'Launch window')}
         </h2>
         {window && (
           <p className="mt-1 text-[11.5px] leading-relaxed text-data" data-testid="lw-window-range">
@@ -385,7 +578,16 @@ export function LaunchWindowDetail() {
           </p>
         )}
       </header>
-      {!window && <p className="text-[12px] text-ink-dim">{s.busy || !s.result ? t('计算中…', 'Computing…') : t('请在左侧选择一个窗口。', 'Choose a window on the left.')}</p>}
+      {!window && !solution && (
+        <p className="text-[12px] text-ink-dim">
+          {s.busy || (routed ? !s.routeResult : !s.result)
+            ? routed
+              ? t(`正在搜索经${s.flybys.map((id) => (language === 'en' ? findPlanet(id).name : findPlanet(id).nameZh)).join('、')}的路线…`, 'Searching gravity-assist routes…')
+              : t('计算中…', 'Computing…')
+            : t('请在左侧选择一个窗口。', 'Choose a window on the left.')}
+        </p>
+      )}
+      {solution && <RouteDetail />}
       {window && (
         <>
           <section>
@@ -409,13 +611,16 @@ export function LaunchWindowDetail() {
               <TransferTable transfer={s.picked} prefix="lw-picked" />
             </section>
           )}
+          {direct && s.result && (
+            <TrajectoryDiagram sequence={direct.sequence} dates={direct.dates} legs={direct.legs} table={s.result.options.table} />
+          )}
         </>
       )}
       <footer className="flex flex-col gap-1 border-t border-line/60 pt-2 text-[10px] leading-relaxed text-ink-faint">
         <p>
           {t(
-            '模型：行星位置用 JPL 近似星历（开普勒根数及其长期变化率）；日心段解兰伯特问题；出发与到达按拼接圆锥、瞬时点火计算。只算直接转移，不含借力飞越、深空机动和发射场限制；用于选窗口，不能用于精确导航。',
-            'Model: planet positions from JPL approximate ephemerides (Keplerian elements and secular rates); the heliocentric leg solves Lambert’s problem; departure and arrival use patched conics with impulsive burns. Direct transfers only — no gravity assists, deep-space maneuvers or launch-site constraints. Good for choosing windows, not for precise navigation.',
+            '模型：行星位置用 JPL 近似星历（开普勒根数及其长期变化率）；每段日心轨道解兰伯特问题；出发、飞越与到达按拼接圆锥、瞬时点火计算。不含深空机动和发射场限制；用于选窗口，不能用于精确导航。与 JPL Horizons（DE441）逐点对比：火星、金星 2026 年窗口最优点的出发日、飞行时间完全相同，总 Δv 相差 < 1 m/s。',
+            'Model: planet positions from JPL approximate ephemerides (Keplerian elements and secular rates); each heliocentric leg solves Lambert’s problem; departure, flybys and arrival use patched conics with impulsive burns. No deep-space maneuvers or launch-site constraints. Good for choosing windows, not for precise navigation. Checked point by point against JPL Horizons (DE441): for the 2026 Mars and Venus windows the optimal launch date and flight time are identical and total Δv agrees within 1 m/s.',
           )}
         </p>
         <p data-testid="lw-ephemeris">

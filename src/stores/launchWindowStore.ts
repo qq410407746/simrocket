@@ -6,6 +6,8 @@ import { create } from 'zustand';
 import { type PlanetId, isPlanetId } from '@/game/interplanetary/planets';
 import { type ArrivalMode, type Transfer, computeTransfer, flightTimeRange } from '@/game/interplanetary/transfer';
 import { type PorkchopGrid, type WindowSearchResult, porkchop, searchWindows } from '@/game/interplanetary/windows';
+import { type MgaSearchInput, type MgaSearchResult, PRESET_ROUTES, isValidSequence } from '@/game/interplanetary/mga';
+import type { RouteSearchRequest, RouteSearchResponse } from '@/workers/routeSearch.worker';
 import { julianDateFromUnixMs } from '@/game/physics/ephemeris/time';
 
 /** 停泊轨道高度 [m]：与游戏里"从近地轨道出发"一致。 */
@@ -22,6 +24,8 @@ interface Inputs {
   readonly arrival: ArrivalMode;
   /** 最长飞行时间 [天]；null 表示使用默认上限。 */
   readonly maxFlightDays: number | null;
+  /** 借力飞越的中间行星（不含地球出发点与目标）；空数组表示直飞。 */
+  readonly flybys: readonly PlanetId[];
 }
 
 interface LaunchWindowState extends Inputs {
@@ -31,6 +35,12 @@ interface LaunchWindowState extends Inputs {
   /** 玩家在猪排图上点选的轨道；null 表示显示窗口最优解。 */
   readonly picked: Transfer | null;
   readonly busy: boolean;
+  /** 借力路线的搜索结果（后台线程计算）。 */
+  readonly routeResult: MgaSearchResult | null;
+  readonly routeError: string | null;
+  readonly selectedSolution: number;
+  setFlybys: (flybys: readonly PlanetId[]) => void;
+  selectSolution: (index: number) => void;
   setTarget: (target: string) => void;
   setStartYear: (year: number) => void;
   setSpan: (span: SearchSpan) => void;
@@ -63,10 +73,47 @@ const run = (inputs: Inputs) => {
 
 let pending: ReturnType<typeof setTimeout> | null = null;
 
+/** 借力路线 = 地球 + 中间行星 + 目标。 */
+export const routeOf = (inputs: Pick<Inputs, 'target' | 'flybys'>): PlanetId[] => ['earth', ...inputs.flybys, inputs.target];
+
+export const presetFlybys = (target: PlanetId): PlanetId[][] => PRESET_ROUTES[target].map((route) => route.slice(1, -1));
+
+let worker: Worker | null = null;
+let requestId = 0;
+const routeWorker = (onMessage: (response: RouteSearchResponse) => void): Worker => {
+  if (!worker) worker = new Worker(new URL('../workers/routeSearch.worker.ts', import.meta.url), { type: 'module' });
+  worker.onmessage = (event: MessageEvent<RouteSearchResponse>) => onMessage(event.data);
+  return worker;
+};
+
 export const useLaunchWindowStore = create<LaunchWindowState>()((set, get) => {
   /** 输入变化：先显示"计算中"，下一帧再算，避免点击后界面卡住没有反馈。 */
   const update = (patch: Partial<Inputs>) => {
     set({ ...patch, busy: true });
+    const inputs = get();
+    if (inputs.flybys.length > 0) {
+      // 借力路线：交给后台线程；只接受最后一次请求的结果
+      if (pending) clearTimeout(pending);
+      const id = ++requestId;
+      const request: RouteSearchRequest = {
+        id,
+        input: {
+          sequence: routeOf(inputs),
+          startJd: yearJd(inputs.startYear),
+          endJd: yearJd(inputs.startYear + inputs.span),
+          arrival: inputs.arrival,
+          parkingAltitude: PARKING_ALTITUDE,
+          maxTotalDays: inputs.maxFlightDays ?? undefined,
+        } satisfies MgaSearchInput,
+      };
+      set({ routeResult: null, routeError: null, selectedSolution: 0 });
+      routeWorker((response) => {
+        if (response.id !== requestId) return;
+        set({ routeResult: response.result ?? null, routeError: response.error ?? null, busy: false, selectedSolution: 0 });
+      }).postMessage(request);
+      return;
+    }
+    requestId++;
     if (pending) clearTimeout(pending);
     pending = setTimeout(() => {
       pending = null;
@@ -79,13 +126,17 @@ export const useLaunchWindowStore = create<LaunchWindowState>()((set, get) => {
     span: 10,
     arrival: 'capture',
     maxFlightDays: null,
+    flybys: [],
+    routeResult: null,
+    routeError: null,
+    selectedSolution: 0,
     result: null,
     selectedWindow: 0,
     grid: null,
     picked: null,
     busy: false,
     setTarget: (target) => {
-      if (isPlanetId(target) && target !== 'earth') update({ target, maxFlightDays: null });
+      if (isPlanetId(target) && target !== 'earth') update({ target, maxFlightDays: null, flybys: [] });
     },
     setStartYear: (year) => {
       if (Number.isInteger(year) && year >= FIRST_YEAR && year <= LAST_YEAR) update({ startYear: year });
@@ -93,8 +144,17 @@ export const useLaunchWindowStore = create<LaunchWindowState>()((set, get) => {
     setSpan: (span) => update({ span }),
     setArrival: (arrival) => update({ arrival }),
     setMaxFlightDays: (days) => {
-      const range = flightTimeRange(get().target);
-      if (days === null || (Number.isFinite(days) && days > range.min)) update({ maxFlightDays: days });
+      const { target, flybys } = get();
+      const min = flybys.length > 0 ? 30 : flightTimeRange(target).min;
+      if (days === null || (Number.isFinite(days) && days > min)) update({ maxFlightDays: days });
+    },
+    setFlybys: (flybys) => {
+      const { target } = get();
+      if (flybys.length > 0 && !isValidSequence(['earth', ...flybys, target])) return;
+      update({ flybys: [...flybys], maxFlightDays: null });
+    },
+    selectSolution: (index) => {
+      if (get().routeResult?.solutions[index]) set({ selectedSolution: index });
     },
     selectWindow: (index) => {
       const { result, target } = get();
@@ -109,7 +169,8 @@ export const useLaunchWindowStore = create<LaunchWindowState>()((set, get) => {
     },
     clearPick: () => set({ picked: null }),
     compute: () => {
-      if (!get().result && !get().busy) update({});
+      const s = get();
+      if (!s.busy && (s.flybys.length > 0 ? !s.routeResult : !s.result)) update({});
     },
   };
 });
