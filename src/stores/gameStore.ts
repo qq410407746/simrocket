@@ -7,6 +7,7 @@ import { persist } from 'zustand/middleware';
 import { DEFAULT_LAUNCH_SITE_ID, findLaunchSite } from '@/data/launchSites';
 import { MISSION_CATALOG, findMission } from '@/data/missions';
 import { DEFAULT_VEHICLE_ID, findVehicle } from '@/data/vehicles';
+import { DEFAULT_WIKI_ARTICLE, isWikiArticleId, type WikiArticleId } from '@/data/wiki';
 import { DEFAULT_LANGUAGE, isLanguage, type Language } from '@/i18n/locale';
 
 export type Screen = 'menu' | 'flight';
@@ -20,8 +21,11 @@ export type StartMode = 'pad' | 'orbit';
 
 export type GraphicsQuality = 'low' | 'medium' | 'high';
 
-/** 主菜单的页签：任务、自由飞行（沙盒）、飞行记录。 */
-export type MenuTab = 'missions' | 'sandbox' | 'logbook' | 'design';
+/** 主菜单的页签：任务、自由飞行（沙盒）、火箭设计、飞行记录、知识库。 */
+export type MenuTab = 'missions' | 'sandbox' | 'logbook' | 'design' | 'wiki';
+
+const MENU_TABS: readonly MenuTab[] = ['missions', 'sandbox', 'logbook', 'design', 'wiki'];
+const isMenuTab = (value: unknown): value is MenuTab => MENU_TABS.includes(value as MenuTab);
 
 interface GameState {
   screen: Screen;
@@ -34,6 +38,8 @@ interface GameState {
   menuTab: MenuTab;
   /** 主菜单任务列表里选中的任务。 */
   selectedMissionId: string;
+  /** 知识库里正在阅读的条目。 */
+  wikiArticleId: WikiArticleId;
   /** 当前飞行所属的任务；自由飞行时为 null。 */
   missionId: string | null;
   /** 每次开始任务时加一：即使火箭、发射场都没变，也要从头开始一次新的飞行。 */
@@ -47,6 +53,7 @@ interface GameState {
   returnToMenu: () => void;
   setMenuTab: (tab: MenuTab) => void;
   selectMission: (id: string) => void;
+  selectWikiArticle: (id: string) => void;
   setCameraMode: (mode: CameraMode) => void;
   setStartMode: (mode: StartMode) => void;
   setQuality: (quality: GraphicsQuality) => void;
@@ -65,6 +72,7 @@ export const useGameStore = create<GameState>()(
       language: DEFAULT_LANGUAGE,
       menuTab: 'missions',
       selectedMissionId: (MISSION_CATALOG[0] as (typeof MISSION_CATALOG)[number]).id,
+      wikiArticleId: DEFAULT_WIKI_ARTICLE,
       missionId: null,
       launchSerial: 0,
       selectVehicle: (id) => {
@@ -93,6 +101,9 @@ export const useGameStore = create<GameState>()(
       selectMission: (id) => {
         if (findMission(id)) set({ selectedMissionId: id });
       },
+      selectWikiArticle: (id) => {
+        if (isWikiArticleId(id)) set({ wikiArticleId: id });
+      },
       setCameraMode: (cameraMode) => set({ cameraMode }),
       setStartMode: (startMode) => set({ startMode }),
       setQuality: (quality) => set({ quality }),
@@ -111,6 +122,7 @@ export const useGameStore = create<GameState>()(
         language: state.language,
         menuTab: state.menuTab,
         selectedMissionId: state.selectedMissionId,
+        wikiArticleId: state.wikiArticleId,
       }),
       // 存档可能引用已不存在的型号/发射场：回退到默认值。
       merge: (persisted, current) => {
@@ -124,7 +136,8 @@ export const useGameStore = create<GameState>()(
             saved.quality === 'low' || saved.quality === 'medium' || saved.quality === 'high'
               ? saved.quality
               : current.quality,
-          menuTab: saved.menuTab === 'missions' || saved.menuTab === 'sandbox' || saved.menuTab === 'logbook' || saved.menuTab === 'design' ? saved.menuTab : current.menuTab,
+          menuTab: isMenuTab(saved.menuTab) ? saved.menuTab : current.menuTab,
+          wikiArticleId: isWikiArticleId(saved.wikiArticleId) ? saved.wikiArticleId : current.wikiArticleId,
           selectedMissionId: saved.selectedMissionId && findMission(saved.selectedMissionId) ? saved.selectedMissionId : current.selectedMissionId,
         };
       },

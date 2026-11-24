@@ -14,6 +14,7 @@ import { useDesignStore, resolveVehicle, useVehicleDefinition } from '@/stores/d
 import { DesignWorkshop } from './DesignWorkshop';
 import { LogbookMenu } from './LogbookMenu';
 import { MissionBriefing, MissionList } from './MissionMenu';
+import { WikiArticleView, WikiIndex } from './WikiMenu';
 
 const QUALITY_LABEL: Record<GraphicsQuality, readonly [string, string]> = { low: ['低', 'Low'], medium: ['中', 'Medium'], high: ['高', 'High'] };
 
@@ -22,6 +23,7 @@ const TABS: readonly { readonly tab: MenuTab; readonly label: readonly [string, 
   { tab: 'sandbox', label: ['自由飞行', 'Free flight'], hint: ['自己选择火箭、发射场与出发点，没有目标与评分', 'Choose your vehicle, launch site and starting point. No objectives or scoring.'] },
   { tab: 'design', label: ['火箭设计', 'Rocket design'], hint: ['组装、保存与试飞自定义火箭', 'Assemble, save and test-fly custom rockets'] },
   { tab: 'logbook', label: ['飞行记录', 'Logbook'], hint: ['最近的飞行与成绩', 'Recent flights and results'] },
+  { tab: 'wiki', label: ['知识库', 'Wiki'], hint: ['火箭方程、轨道力学、宇宙速度，以及地球、月球、火星', 'Rocket equation, orbital mechanics, cosmic velocities, and Earth, the Moon and Mars'] },
 ];
 
 function VehicleCard({ vehicle, selected, onSelect }: { vehicle: VehicleDefinition; selected: boolean; onSelect: () => void }) {
@@ -215,7 +217,7 @@ export function MainMenu() {
           <p className="mt-1.5 text-[11px] leading-relaxed text-ink-dim">{t('以真实的轨道动力学与空气动力学为基础：发射、入轨、轨道机动、再入。', 'Launch, reach orbit, maneuver and reenter — powered by orbital mechanics and aerodynamics.')}</p>
         </header>
 
-        <nav className="grid grid-cols-2 gap-1" role="tablist" aria-label={t('主菜单', 'Main menu')}>
+        <nav className="grid grid-cols-3 gap-1" role="tablist" aria-label={t('主菜单', 'Main menu')}>
           {TABS.map((entry) => {
             const selected = tab === entry.tab;
             return (
@@ -241,6 +243,7 @@ export function MainMenu() {
         {tab === 'sandbox' && <SandboxSetup />}
         {tab === 'logbook' && <LogbookMenu />}
         {tab === 'design' && <DesignWorkshop />}
+        {tab === 'wiki' && <WikiIndex />}
 
         <footer data-testid="menu-settings" className="mt-auto flex shrink-0 flex-col gap-2 border-t border-line/60 pt-3">
           <div className="flex items-center justify-between">
@@ -278,6 +281,7 @@ export function MainMenu() {
         </footer>
       </div>
       {tab === 'missions' && <MissionBriefing />}
+      {tab === 'wiki' && <WikiArticleView />}
     </div>
   );
 }
