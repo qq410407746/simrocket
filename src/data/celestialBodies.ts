@@ -9,7 +9,10 @@
  * （2026-11-21 查阅；这些条目再引用 NASA NSSDC 行星概况、IERS、JPL 等资料）。
  */
 import { ASTRO, EARTH } from '@/game/physics/constants';
+import { SUN_MU } from '@/game/interplanetary/planets';
 import { circularSpeed, escapeSpeed } from '@/game/physics/orbital/elements';
+
+export { SUN_MU };
 
 export type BodyId = 'earth' | 'moon' | 'mars';
 
@@ -51,8 +54,6 @@ const DAY = ASTRO.SECONDS_PER_DAY;
 /** 万有引力常数 G [m³/(kg·s²)]（CODATA 2018）。只用于知识库的说明，模拟器全部使用 μ。 */
 export const GRAVITATIONAL_CONSTANT = 6.6743e-11;
 
-/** 太阳的标准引力参数 [m³/s²]。 */
-export const SUN_MU = 1.32712440042e20;
 
 export const EARTH_BODY: CelestialBody = {
   id: 'earth',

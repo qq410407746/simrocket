@@ -21,10 +21,10 @@ export type StartMode = 'pad' | 'orbit';
 
 export type GraphicsQuality = 'low' | 'medium' | 'high';
 
-/** 主菜单的页签：任务、自由飞行（沙盒）、火箭设计、飞行记录、知识库。 */
-export type MenuTab = 'missions' | 'sandbox' | 'logbook' | 'design' | 'wiki';
+/** 主菜单的页签：任务、自由飞行（沙盒）、火箭设计、飞行记录、发射窗口、知识库。 */
+export type MenuTab = 'missions' | 'sandbox' | 'logbook' | 'design' | 'windows' | 'wiki';
 
-const MENU_TABS: readonly MenuTab[] = ['missions', 'sandbox', 'logbook', 'design', 'wiki'];
+const MENU_TABS: readonly MenuTab[] = ['missions', 'sandbox', 'logbook', 'design', 'windows', 'wiki'];
 const isMenuTab = (value: unknown): value is MenuTab => MENU_TABS.includes(value as MenuTab);
 
 interface GameState {

@@ -14,6 +14,7 @@ import { useDesignStore, resolveVehicle, useVehicleDefinition } from '@/stores/d
 import { DesignWorkshop } from './DesignWorkshop';
 import { LogbookMenu } from './LogbookMenu';
 import { MissionBriefing, MissionList } from './MissionMenu';
+import { LaunchWindowDetail, LaunchWindowSetup } from './LaunchWindowMenu';
 import { WikiArticleView, WikiIndex } from './WikiMenu';
 
 const QUALITY_LABEL: Record<GraphicsQuality, readonly [string, string]> = { low: ['低', 'Low'], medium: ['中', 'Medium'], high: ['高', 'High'] };
@@ -23,6 +24,7 @@ const TABS: readonly { readonly tab: MenuTab; readonly label: readonly [string, 
   { tab: 'sandbox', label: ['自由飞行', 'Free flight'], hint: ['自己选择火箭、发射场与出发点，没有目标与评分', 'Choose your vehicle, launch site and starting point. No objectives or scoring.'] },
   { tab: 'design', label: ['火箭设计', 'Rocket design'], hint: ['组装、保存与试飞自定义火箭', 'Assemble, save and test-fly custom rockets'] },
   { tab: 'logbook', label: ['飞行记录', 'Logbook'], hint: ['最近的飞行与成绩', 'Recent flights and results'] },
+  { tab: 'windows', label: ['发射窗口', 'Launch windows'], hint: ['计算飞往水星、金星、火星、木星、土星等行星的最佳发射日期、所需 Δv 与到达时间', 'Find the best launch dates, Δv and arrival times for trips to Mercury, Venus, Mars, Jupiter, Saturn and beyond'] },
   { tab: 'wiki', label: ['知识库', 'Wiki'], hint: ['火箭方程、轨道力学、宇宙速度，以及地球、月球、火星', 'Rocket equation, orbital mechanics, cosmic velocities, and Earth, the Moon and Mars'] },
 ];
 
@@ -243,6 +245,7 @@ export function MainMenu() {
         {tab === 'sandbox' && <SandboxSetup />}
         {tab === 'logbook' && <LogbookMenu />}
         {tab === 'design' && <DesignWorkshop />}
+        {tab === 'windows' && <LaunchWindowSetup />}
         {tab === 'wiki' && <WikiIndex />}
 
         <footer data-testid="menu-settings" className="mt-auto flex shrink-0 flex-col gap-2 border-t border-line/60 pt-3">
@@ -281,6 +284,7 @@ export function MainMenu() {
         </footer>
       </div>
       {tab === 'missions' && <MissionBriefing />}
+      {tab === 'windows' && <LaunchWindowDetail />}
       {tab === 'wiki' && <WikiArticleView />}
     </div>
   );
