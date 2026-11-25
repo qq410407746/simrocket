@@ -330,12 +330,19 @@ test.describe('Orbital Frontier 冒烟测试', () => {
 
     await page.getByTestId('warp-1000').click();
     await expect.poll(async () => (await readState(page))?.sim.timeWarp).toBe(1000);
-    const t0 = (await readState(page))!.sim.telemetry!.simTime;
-    const wall0 = Date.now();
+    // 遥测每 100 ms 才刷新一次：在它刚刷新的时刻记录墙钟，避免读到过期的模拟时间（重负载下会让速率偏高或偏低）
+    const freshSimTime = async (): Promise<{ sim: number; wall: number }> => {
+      const before = (await readState(page))!.sim.telemetry!.simTime;
+      let now = before;
+      while (now === before) now = (await readState(page))!.sim.telemetry!.simTime;
+      return { sim: now, wall: Date.now() };
+    };
+    const start = await freshSimTime();
     await page.waitForTimeout(3000);
+    const end = await freshSimTime();
     const state = await expectAllFinite(page);
-    const elapsedSim = state.sim.telemetry!.simTime - t0;
-    const elapsedWall = (Date.now() - wall0) / 1000;
+    const elapsedSim = end.sim - start.sim;
+    const elapsedWall = (end.wall - start.wall) / 1000;
     // 实际速率应接近 1000×（允许软件渲染环境下的调度抖动）
     expect(elapsedSim / elapsedWall).toBeGreaterThan(700);
     expect(elapsedSim / elapsedWall).toBeLessThan(1100);
