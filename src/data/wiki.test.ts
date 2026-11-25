@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { CELESTIAL_BODIES, MARS_BODY, MOON_BODY, cosmicVelocities, derivedSurface } from './celestialBodies';
 import { type Bilingual, type WikiBlock, WIKI_ARTICLES, WIKI_FIGURES, findWikiArticle, isWikiArticleId } from './wiki';
 import { VOYAGER_ROUTES } from './voyagerReference';
+import { WIKI_ARTICLE_IDS } from './wikiIds';
 import { evaluateRoute } from '@/game/interplanetary/mga';
 import { VOYAGER } from '@/game/interplanetary/testing/horizons';
 
@@ -42,6 +43,8 @@ describe('知识库条目', () => {
       'deep-space-maneuvers',
     ]);
     expect(WIKI_ARTICLES.filter((a) => a.category === 'showcase')).toHaveLength(4);
+    // 独立的 id 列表（游戏状态用）与条目一一对应
+    expect(WIKI_ARTICLES.map((a) => a.id)).toEqual([...WIKI_ARTICLE_IDS]);
     for (const article of WIKI_ARTICLES) {
       expect(isWikiArticleId(article.id)).toBe(true);
       expect(article.sections.length).toBeGreaterThan(0);

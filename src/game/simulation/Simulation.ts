@@ -1085,8 +1085,14 @@ export class Simulation {
         const delivered = effectiveExhaust * Math.log(massBefore / (massBefore - massFlow * elapsed));
         this.maneuver.remaining = addScaled(this.maneuver.remaining, nose, -delivered);
       }
-      this.refreshConfiguration();
+      // 只消耗了推进剂：气动特性与箭体高度只取决于挂着哪几级，不用重算
+      this.refreshMass();
       for (const index of depleted) this.emit('depleted', index);
+      if (depleted.length === 0 && elapsed >= burnTime && t0 + dt - t <= 1e-12) {
+        // 整步烧完且没有单元耗尽：推进剂仍有剩余，下一段不会再开始，不必重新取推进构型
+        burning = true;
+        break;
+      }
       propulsion = activePropulsion(this.vehicle, this.cfg);
       burning = propulsion !== null && propulsion.propellantMass > 0;
       if (elapsed < burnTime) break;
@@ -1652,11 +1658,16 @@ export class Simulation {
 
   /** 构型或推进剂变化后，刷新质量、质心、高度与气动特性。 */
   private refreshConfiguration(): void {
+    this.refreshMass();
+    this.height = stackHeight(this.vehicle, this.cfg);
+    this.forces.aero = configurationAero(this.vehicle, this.cfg);
+  }
+
+  /** 只有推进剂变化（挂着的级不变）时：刷新质量与质心。 */
+  private refreshMass(): void {
     const props = configurationMassProperties(this.vehicle, this.cfg);
     this.mass = props.mass;
     this.centerOfMassHeight = props.centerOfMassHeight;
-    this.height = stackHeight(this.vehicle, this.cfg);
-    this.forces.aero = configurationAero(this.vehicle, this.cfg);
   }
 
   /**

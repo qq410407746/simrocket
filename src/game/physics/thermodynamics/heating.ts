@@ -73,8 +73,12 @@ export const hotWallFactor = (wallTemperature: number, ambientTemperature: numbe
 };
 
 /** 灰体表面的净辐射热流 ε·σ·(T_w⁴ − T_env⁴) [W/m²]（向外为正）。 */
-export const radiativeHeatFlux = (emissivity: number, wallTemperature: number, environmentTemperature: number): number =>
-  emissivity * STEFAN_BOLTZMANN * (wallTemperature ** 4 - environmentTemperature ** 4);
+export const radiativeHeatFlux = (emissivity: number, wallTemperature: number, environmentTemperature: number): number => {
+  // 用乘法代替 ** 4（每个物理步每个热区都要算一次）
+  const w2 = wallTemperature * wallTemperature;
+  const e2 = environmentTemperature * environmentTemperature;
+  return emissivity * STEFAN_BOLTZMANN * (w2 * w2 - e2 * e2);
+};
 
 /** 给定吸收热流时的辐射平衡温度 [K]（环境温度取 0 的近似，用于估算与测试）。 */
 export const radiativeEquilibriumTemperature = (heatFlux: number, emissivity: number): number =>
@@ -123,9 +127,9 @@ export const exposure = (zone: ThermalZoneId, cosAlpha: number, sideSlope = 0): 
     const sin = Math.sqrt(1 - cos * cos);
     // sin(α + θ)
     const facing = sideSlope === 0 ? sin : sin * Math.cos(sideSlope) + cos * Math.sin(sideSlope);
-    if (facing >= 0) return SIDEWALL_FRACTION + (CYLINDER_FRACTION - SIDEWALL_FRACTION) * facing ** 1.5;
+    if (facing >= 0) return SIDEWALL_FRACTION + (CYLINDER_FRACTION - SIDEWALL_FRACTION) * facing * Math.sqrt(facing);
     return SIDEWALL_FRACTION - (SIDEWALL_FRACTION - LEEWARD_FRACTION) * Math.min(1, -facing / SHADOW_DEPTH);
   }
   const facing = Math.max(0, zone === 'nose' ? cos : -cos);
-  return LEEWARD_FRACTION + (1 - LEEWARD_FRACTION) * facing ** 1.5;
+  return LEEWARD_FRACTION + (1 - LEEWARD_FRACTION) * facing * Math.sqrt(facing);
 };

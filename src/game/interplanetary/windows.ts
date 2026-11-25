@@ -6,7 +6,7 @@
  * 优化目标：进入环绕轨道时是"出发 + 到达"的总 Δv，飞掠时只看出发 Δv。
  */
 import { ASTRO } from '../physics/constants';
-import { tableFor } from './ephemeris';
+import { planetState, tableFor } from './ephemeris';
 import { type PlanetId } from './planets';
 import { type ArrivalMode, DEFAULT_CAPTURE_ALTITUDE, type Transfer, type TransferOptions, computeTransfer, flightTimeRange, synodicPeriod } from './transfer';
 
@@ -64,9 +64,10 @@ const cost = (t: Transfer | null): number => (t ? t.totalDeltaV : Number.POSITIV
 
 const bestOverFlightTime = (target: PlanetId, departureJd: number, options: TransferOptions, min: number, max: number): Transfer | null => {
   let best: Transfer | null = null;
+  const earth = planetState('earth', departureJd, options.table);
   for (let k = 0; k < FLIGHT_SAMPLES; k++) {
     const days = min + ((max - min) * k) / (FLIGHT_SAMPLES - 1);
-    const t = computeTransfer(target, departureJd, departureJd + days, options);
+    const t = computeTransfer(target, departureJd, departureJd + days, options, earth);
     if (cost(t) < cost(best)) best = t;
   }
   return best;
@@ -162,10 +163,12 @@ export const porkchop = (
   const flightDays = Array.from({ length: rows }, (_, j) => range.min + ((range.max - range.min) * j) / (rows - 1));
   const values = new Float64Array(columns * rows);
   let min = Number.POSITIVE_INFINITY;
-  for (let j = 0; j < rows; j++) {
-    for (let i = 0; i < columns; i++) {
-      const dep = departures[i]!;
-      const t = computeTransfer(target, dep, dep + flightDays[j]!, options);
+  // 按列（出发日）循环：每列的地球状态只算一次
+  for (let i = 0; i < columns; i++) {
+    const dep = departures[i]!;
+    const earth = planetState('earth', dep, options.table);
+    for (let j = 0; j < rows; j++) {
+      const t = computeTransfer(target, dep, dep + flightDays[j]!, options, earth);
       const v = t ? t.totalDeltaV : Number.NaN;
       values[j * columns + i] = v;
       if (v < min) min = v;

@@ -33,8 +33,17 @@ export const cross = (a: Vec3, b: Vec3): Vec3 =>
   vec3(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x);
 
 export const lengthSq = (a: Vec3): number => a.x * a.x + a.y * a.y + a.z * a.z;
-export const length = (a: Vec3): number => Math.hypot(a.x, a.y, a.z);
-export const distance = (a: Vec3, b: Vec3): number => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+/**
+ * 长度与距离用 √(x² + y² + z²) 而不是 Math.hypot：hypot 为了防止中间值溢出做了缩放，在 V8 里慢好几倍，
+ * 是物理步进与轨道计算里最常调用的函数之一。本项目的量级最大约 1e13 m（平方 1e26），远不会溢出（double 上限 1e308）。
+ */
+export const length = (a: Vec3): number => Math.sqrt(a.x * a.x + a.y * a.y + a.z * a.z);
+export const distance = (a: Vec3, b: Vec3): number => {
+  const dx = a.x - b.x;
+  const dy = a.y - b.y;
+  const dz = a.z - b.z;
+  return Math.sqrt(dx * dx + dy * dy + dz * dz);
+};
 
 /**
  * 归一化。零向量没有方向，返回 fallback（默认 +X）而不是 NaN，

@@ -15,6 +15,7 @@ import { reachableInclination } from '@/game/physics/orbital/launch';
 import { MIN_FLYBY_RADIUS } from '@/game/interplanetary/flyby';
 import { type PlanetId, SUN_MU, findPlanet } from '@/game/interplanetary/planets';
 import { formatNumber } from '@/utils/format';
+import type { WikiArticleId } from './wikiIds';
 
 /** 一段双语文字：[中文, English]。 */
 export type Bilingual = readonly [zh: string, en: string];
@@ -36,18 +37,8 @@ export interface WikiSection {
   readonly blocks: readonly WikiBlock[];
 }
 
-export type WikiArticleId =
-  | 'physics-basics'
-  | 'rocket-equation'
-  | 'orbital-elements'
-  | 'cosmic-velocities'
-  | 'earth'
-  | 'moon'
-  | 'mars'
-  | 'gravity-assist'
-  | 'voyager-grand-tour'
-  | 'multi-revolution-lambert'
-  | 'deep-space-maneuvers';
+export type { WikiArticleId } from './wikiIds';
+export { DEFAULT_WIKI_ARTICLE, isWikiArticleId } from './wikiIds';
 
 export type WikiCategory = 'theory' | 'bodies' | 'showcase';
 
@@ -718,11 +709,9 @@ export const WIKI_ARTICLES: readonly WikiArticle[] = [
   DEEP_SPACE_MANEUVERS,
 ];
 
-export const DEFAULT_WIKI_ARTICLE: WikiArticleId = 'rocket-equation';
 
 export const findWikiArticle = (id: string): WikiArticle | undefined => WIKI_ARTICLES.find((a) => a.id === id);
 
-export const isWikiArticleId = (id: unknown): id is WikiArticleId => typeof id === 'string' && WIKI_ARTICLES.some((a) => a.id === id);
 
 export const WIKI_CATEGORY_LABEL: Record<WikiCategory, Bilingual> = {
   theory: ['原理', 'Principles'],

@@ -1,13 +1,13 @@
 /**
  * 发射窗口计算器的状态：输入条件、搜索结果、当前窗口的猪排图、玩家在图上点选的轨道。
- * 计算是纯函数（`game/interplanetary`），这里只负责在输入变化后重新计算。
+ * 计算是纯函数（`game/interplanetary`），在后台线程里执行；这里只负责在输入变化后发出请求、接收结果。
  */
 import { create } from 'zustand';
 import { type PlanetId, isPlanetId } from '@/game/interplanetary/planets';
 import { type ArrivalMode, type Transfer, computeTransfer, flightTimeRange } from '@/game/interplanetary/transfer';
-import { type PorkchopGrid, type WindowSearchResult, porkchop, searchWindows } from '@/game/interplanetary/windows';
-import { type MgaSearchInput, type MgaSearchResult, PRESET_ROUTES, isValidSequence } from '@/game/interplanetary/mga';
-import type { RouteSearchRequest, RouteSearchResponse } from '@/workers/routeSearch.worker';
+import { type PorkchopGrid, type WindowSearchInput, type WindowSearchResult, porkchop } from '@/game/interplanetary/windows';
+import { type MgaSearchInput, type MgaSearchResult, PRESET_ROUTES, isValidSequence, searchRoute } from '@/game/interplanetary/mga';
+import { type InterplanetaryRequest, type InterplanetaryResponse, runDirect } from '@/workers/interplanetary.worker';
 import { julianDateFromUnixMs } from '@/game/physics/ephemeris/time';
 
 /** 停泊轨道高度 [m]：与游戏里"从近地轨道出发"一致。 */
@@ -57,21 +57,14 @@ const currentYear = (): number => Math.min(LAST_YEAR, Math.max(FIRST_YEAR, new D
 
 const yearJd = (year: number): number => julianDateFromUnixMs(Date.UTC(year, 0, 1));
 
-const run = (inputs: Inputs) => {
-  const result = searchWindows({
-    target: inputs.target,
-    startJd: yearJd(inputs.startYear),
-    endJd: yearJd(inputs.startYear + inputs.span),
-    arrival: inputs.arrival,
-    parkingAltitude: PARKING_ALTITUDE,
-    maxFlightDays: inputs.maxFlightDays ?? undefined,
-  });
-  const first = result.windows[0];
-  const grid = first ? porkchop(inputs.target, first.best.departureJd, result.options, result.flightDays) : null;
-  return { result, grid, selectedWindow: 0, picked: null, busy: false };
-};
-
-let pending: ReturnType<typeof setTimeout> | null = null;
+const directInput = (inputs: Inputs): WindowSearchInput => ({
+  target: inputs.target,
+  startJd: yearJd(inputs.startYear),
+  endJd: yearJd(inputs.startYear + inputs.span),
+  arrival: inputs.arrival,
+  parkingAltitude: PARKING_ALTITUDE,
+  maxFlightDays: inputs.maxFlightDays ?? undefined,
+});
 
 /** 借力路线 = 地球 + 中间行星 + 目标。 */
 export const routeOf = (inputs: Pick<Inputs, 'target' | 'flybys'>): PlanetId[] => ['earth', ...inputs.flybys, inputs.target];
@@ -79,24 +72,45 @@ export const routeOf = (inputs: Pick<Inputs, 'target' | 'flybys'>): PlanetId[] =
 export const presetFlybys = (target: PlanetId): PlanetId[][] => PRESET_ROUTES[target].map((route) => route.slice(1, -1));
 
 let worker: Worker | null = null;
+/** 后台线程正在算的请求；新请求到来时直接终止旧线程，不让它排在一个已经没用的长计算后面。 */
+let inFlight = false;
 let requestId = 0;
-const routeWorker = (onMessage: (response: RouteSearchResponse) => void): Worker => {
-  if (!worker) worker = new Worker(new URL('../workers/routeSearch.worker.ts', import.meta.url), { type: 'module' });
-  worker.onmessage = (event: MessageEvent<RouteSearchResponse>) => onMessage(event.data);
-  return worker;
+
+/** 发出请求；没有 Worker 的环境（例如 Node 测试）在下一轮事件循环里同步计算。 */
+const dispatch = (request: InterplanetaryRequest, onMessage: (response: InterplanetaryResponse) => void): void => {
+  if (typeof Worker === 'undefined') {
+    setTimeout(() => {
+      try {
+        onMessage(request.kind === 'direct' ? { id: request.id, direct: runDirect(request.input) } : { id: request.id, route: searchRoute(request.input) });
+      } catch (error) {
+        onMessage({ id: request.id, error: error instanceof Error ? error.message : String(error) });
+      }
+    }, 0);
+    return;
+  }
+  if (worker && inFlight) {
+    worker.terminate();
+    worker = null;
+  }
+  if (!worker) worker = new Worker(new URL('../workers/interplanetary.worker.ts', import.meta.url), { type: 'module' });
+  worker.onmessage = (event: MessageEvent<InterplanetaryResponse>) => {
+    if (event.data.id === requestId) inFlight = false;
+    onMessage(event.data);
+  };
+  inFlight = true;
+  worker.postMessage(request);
 };
 
 export const useLaunchWindowStore = create<LaunchWindowState>()((set, get) => {
-  /** 输入变化：先显示"计算中"，下一帧再算，避免点击后界面卡住没有反馈。 */
+  /** 输入变化：显示"计算中"，把计算交给后台线程；只接受最后一次请求的结果。 */
   const update = (patch: Partial<Inputs>) => {
     set({ ...patch, busy: true });
     const inputs = get();
+    const id = ++requestId;
     if (inputs.flybys.length > 0) {
-      // 借力路线：交给后台线程；只接受最后一次请求的结果
-      if (pending) clearTimeout(pending);
-      const id = ++requestId;
-      const request: RouteSearchRequest = {
+      const request: InterplanetaryRequest = {
         id,
+        kind: 'route',
         input: {
           sequence: routeOf(inputs),
           startJd: yearJd(inputs.startYear),
@@ -107,18 +121,17 @@ export const useLaunchWindowStore = create<LaunchWindowState>()((set, get) => {
         } satisfies MgaSearchInput,
       };
       set({ routeResult: null, routeError: null, selectedSolution: 0 });
-      routeWorker((response) => {
+      dispatch(request, (response) => {
         if (response.id !== requestId) return;
-        set({ routeResult: response.result ?? null, routeError: response.error ?? null, busy: false, selectedSolution: 0 });
-      }).postMessage(request);
+        set({ routeResult: response.route ?? null, routeError: response.error ?? null, busy: false, selectedSolution: 0 });
+      });
       return;
     }
-    requestId++;
-    if (pending) clearTimeout(pending);
-    pending = setTimeout(() => {
-      pending = null;
-      set(run(get()));
-    }, 0);
+    dispatch({ id, kind: 'direct', input: directInput(inputs) }, (response) => {
+      if (response.id !== requestId) return;
+      if (response.direct) set({ result: response.direct.result, grid: response.direct.grid, selectedWindow: 0, picked: null, busy: false });
+      else set({ busy: false, routeError: response.error ?? null });
+    });
   };
   return {
     target: 'mars',

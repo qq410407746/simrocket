@@ -121,6 +121,7 @@ npm run dev
 | `npm test` | 单元测试（Vitest） |
 | `npm run test:e2e` | 端到端测试（Playwright，自动构建并启动预览服务器） |
 | `npm run check` | 类型检查 + lint + 单元测试 |
+| `npm run bench` | 性能基准（物理步进、轨迹预测、发射窗口与借力路线搜索；中位数，结果见 TESTING.md） |
 
 首次运行端到端测试前需要安装浏览器：
 

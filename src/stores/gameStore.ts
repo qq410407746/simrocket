@@ -7,7 +7,7 @@ import { persist } from 'zustand/middleware';
 import { DEFAULT_LAUNCH_SITE_ID, findLaunchSite } from '@/data/launchSites';
 import { MISSION_CATALOG, findMission } from '@/data/missions';
 import { DEFAULT_VEHICLE_ID, findVehicle } from '@/data/vehicles';
-import { DEFAULT_WIKI_ARTICLE, isWikiArticleId, type WikiArticleId } from '@/data/wiki';
+import { DEFAULT_WIKI_ARTICLE, isWikiArticleId, type WikiArticleId } from '@/data/wikiIds';
 import { DEFAULT_LANGUAGE, isLanguage, type Language } from '@/i18n/locale';
 
 export type Screen = 'menu' | 'flight';

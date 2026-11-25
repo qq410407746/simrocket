@@ -16,7 +16,7 @@
  */
 import { ASTRO, EARTH } from '../physics/constants';
 import { length, sub } from '../physics/math/vec3';
-import { type EphemerisTable, eclipticToEquatorial, planetState } from './ephemeris';
+import { type EphemerisTable, type HeliocentricState, eclipticToEquatorial, planetState } from './ephemeris';
 import { solveLambert } from './lambert';
 import { type PlanetId, SUN_MU, findPlanet } from './planets';
 
@@ -84,10 +84,20 @@ export const captureBurn = (target: PlanetId, mode: ArrivalMode, vInf: number, a
   return ellipticCaptureBurn(vInf, body.mu, periapsis, Math.max(periapsis, CAPTURE_APOAPSIS_RADII * body.equatorialRadius));
 };
 
-export const computeTransfer = (target: PlanetId, departureJd: number, arrivalJd: number, options: TransferOptions): Transfer | null => {
+/**
+ * earthAtDeparture：可选，出发时地球的日心状态。搜索时同一个出发日要试很多个飞行时间，
+ * 由调用者算一次传进来，避免重复计算星历（结果与不传完全相同）。
+ */
+export const computeTransfer = (
+  target: PlanetId,
+  departureJd: number,
+  arrivalJd: number,
+  options: TransferOptions,
+  earthAtDeparture?: HeliocentricState,
+): Transfer | null => {
   const flightTime = (arrivalJd - departureJd) * ASTRO.SECONDS_PER_DAY;
   if (!(flightTime > 0)) return null;
-  const earth = planetState('earth', departureJd, options.table);
+  const earth = earthAtDeparture ?? planetState('earth', departureJd, options.table);
   const planet = planetState(target, arrivalJd, options.table);
   const solution = solveLambert(earth.position, planet.position, flightTime, SUN_MU, true);
   if (!solution) return null;

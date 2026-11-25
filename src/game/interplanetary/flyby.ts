@@ -73,7 +73,8 @@ export const flyby = (body: PlanetId, vIn: Vec3, vOut: Vec3): FlybyResult => {
     // 偏转角随 rₚ 单调减小：在对数尺度上二分
     let lo = Math.log(rMin);
     let hi = Math.log(MAX_PERIAPSIS);
-    for (let i = 0; i < 80; i++) {
+    // ln rₚ 的区间缩到 1e-10（rₚ 相对误差 1e-10）即停，约 37 次；原来固定 80 次
+    for (let i = 0; i < 80 && hi - lo > 1e-10; i++) {
       const mid = (lo + hi) / 2;
       if (turnAt(Math.exp(mid)) > delta) lo = mid;
       else hi = mid;
